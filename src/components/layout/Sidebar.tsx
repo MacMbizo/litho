@@ -22,7 +22,9 @@ import {
   HardDrive,
   Activity,
   MoreVertical,
-  Edit3
+  Edit3,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 import { MarkdownFile, ViewMode, DocType, FileTreeNode, ProjectWorkspace } from '../../types/document';
 import { FileContextMenu, ContextMenuState } from './FileContextMenu';
@@ -46,6 +48,10 @@ interface SidebarProps {
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   onAIAssist?: (file: MarkdownFile) => void;
+  width: number;
+  onWidthChange: (w: number) => void;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -67,9 +73,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
   theme,
   onToggleTheme,
   onAIAssist,
+  width,
+  onWidthChange,
+  isCollapsed,
+  onToggleCollapse,
 }) => {
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const isResizingRef = React.useRef(false);
+
+  const startResizing = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const newWidth = Math.min(Math.max(moveEvent.clientX, 200), 480);
+      onWidthChange(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      isResizingRef.current = false;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
   
   // Prompt modals for rename / new folder
   const [modalType, setModalType] = useState<'new-folder' | 'rename' | null>(null);
@@ -223,10 +254,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  if (isCollapsed) return null;
+
   return (
-    <aside className="w-64 h-screen bg-[#202020] text-[#9b9b9b] flex flex-col border-r border-[#2f2f2f] select-none text-sm font-sans shrink-0">
+    <aside 
+      style={{ width: `${width}px` }}
+      className="relative h-screen bg-[#1e1e21] text-[#9b9b9b] flex flex-col border-r border-[#2c2c30] select-none text-sm font-sans shrink-0"
+    >
       {/* Workspace Header & Project Folder Button */}
-      <div className="p-3 border-b border-[#2f2f2f] flex items-center justify-between">
+      <div className="p-3 border-b border-[#2c2c30] flex items-center justify-between">
         <div 
           onClick={() => onSelectViewMode('project-overview')}
           className="flex items-center gap-2 cursor-pointer group truncate"
@@ -259,6 +295,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title="Toggle theme"
           >
             {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            onClick={onToggleCollapse}
+            className="p-1.5 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-white transition"
+            title="Collapse sidebar (Ctrl+\)"
+          >
+            <PanelLeftClose className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -473,6 +516,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+      {/* Draggable Resizer Edge */}
+      <div
+        onMouseDown={startResizing}
+        onDoubleClick={() => onWidthChange(256)}
+        className="absolute right-0 top-0 bottom-0 w-1 hover:w-1.5 cursor-col-resize hover:bg-amber-500/70 active:bg-amber-500 transition-colors z-30"
+        title="Drag to resize sidebar (Double-click to reset)"
+      />
     </aside>
   );
 };

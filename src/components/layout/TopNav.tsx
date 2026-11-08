@@ -15,7 +15,9 @@ import {
   Download,
   Printer,
   FileCode,
-  Check
+  Check,
+  PanelLeftOpen,
+  Folder
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
 
@@ -26,6 +28,9 @@ interface TopNavProps {
   isRawMarkdown: boolean;
   onToggleRawMarkdown: () => void;
   onSave: () => void;
+  isSidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  onOpenProjectOverview?: () => void;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
@@ -35,6 +40,9 @@ export const TopNav: React.FC<TopNavProps> = ({
   isRawMarkdown,
   onToggleRawMarkdown,
   onSave,
+  isSidebarCollapsed,
+  onToggleSidebar,
+  onOpenProjectOverview,
 }) => {
   if (!activeFile) {
     return (
@@ -121,17 +129,34 @@ export const TopNav: React.FC<TopNavProps> = ({
   };
 
   return (
-    <header className="h-12 border-b border-[#2f2f2f] bg-[#191919] px-4 flex items-center justify-between text-xs select-none">
-      {/* Left: Breadcrumbs & Type Badge */}
+    <header className="h-12 border-b border-[#2c2c30] bg-[#1a1a1c] px-4 flex items-center justify-between text-xs select-none">
+      {/* Left: Uncollapse button + Breadcrumbs & Type Badge */}
       <div className="flex items-center gap-3 truncate">
+        {isSidebarCollapsed && onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            className="p-1.5 rounded-lg hover:bg-[#252528] text-neutral-400 hover:text-white transition mr-1"
+            title="Expand sidebar (Ctrl+\)"
+          >
+            <PanelLeftOpen className="w-4 h-4 text-neutral-300" />
+          </button>
+        )}
+
         <div className="flex items-center gap-1.5 text-neutral-400 text-xs truncate">
-          <span className="hover:text-neutral-200 cursor-pointer">{activeFile.path.split('/')[0]}</span>
-          <span>/</span>
+          <span 
+            onClick={onOpenProjectOverview}
+            className="hover:text-neutral-200 cursor-pointer flex items-center gap-1 transition"
+            title="Go to Project Overview"
+          >
+            <Folder className="w-3 h-3 text-neutral-500" />
+            <span>{activeFile.path.split('/')[0]}</span>
+          </span>
+          <span className="text-neutral-600">/</span>
           <span className="font-semibold text-neutral-200 truncate">{activeFile.frontmatter.title || activeFile.name}</span>
         </div>
         {getTypeBadge()}
         {activeFile.isDirty && (
-          <span className="w-2 h-2 rounded-full bg-amber-400" title="Unsaved changes" />
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="Unsaved changes" />
         )}
       </div>
 

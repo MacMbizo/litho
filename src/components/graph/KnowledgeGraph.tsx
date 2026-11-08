@@ -26,6 +26,7 @@ interface GraphLink {
 }
 
 export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ files, onSelectFile }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [filterType, setFilterType] = useState<string>('all');
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
@@ -38,6 +39,24 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ files, onSelectF
   const draggedNodeRef = useRef<GraphNode | null>(null);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const animFrameIdRef = useRef<number | null>(null);
+
+  // Resize canvas responsively using ResizeObserver
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+
+    const handleResize = () => {
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+    };
+
+    handleResize();
+    const observer = new ResizeObserver(handleResize);
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, []);
 
   // Initialize nodes and links from files
   useEffect(() => {
@@ -446,21 +465,36 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ files, onSelectF
       </div>
 
       {/* Main Graph Canvas */}
-      <canvas
-        ref={canvasRef}
-        width={1200}
-        height={800}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onClick={handleClick}
-        onWheel={handleWheel}
-        className="w-full h-full cursor-grab active:cursor-grabbing"
-      />
+      <div ref={containerRef} className="w-full h-full relative">
+        <canvas
+          ref={canvasRef}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onClick={handleClick}
+          onWheel={handleWheel}
+          className="w-full h-full cursor-grab active:cursor-grabbing"
+        />
+      </div>
 
-      {/* Bottom Hint */}
-      <div className="absolute bottom-4 left-6 pointer-events-none text-[11px] text-neutral-500 bg-[#202020]/80 px-3 py-1 rounded-md border border-[#2d2d2d]">
+      {/* Bottom Controls: Hint & Legend */}
+      <div className="absolute bottom-4 left-6 pointer-events-none text-[11px] text-neutral-500 bg-[#202022]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-[#333338] shadow-md">
         Click any node to open document • Drag nodes to explore connections • Scroll to zoom
+      </div>
+
+      <div className="absolute bottom-4 right-6 pointer-events-auto flex items-center gap-3.5 bg-[#202022]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-[#333338] text-[11px] shadow-lg select-none">
+        <span className="flex items-center gap-1.5 text-neutral-300">
+          <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shadow-sm" /> Agent
+        </span>
+        <span className="flex items-center gap-1.5 text-neutral-300">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-sm" /> Skill
+        </span>
+        <span className="flex items-center gap-1.5 text-neutral-300">
+          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm" /> Project
+        </span>
+        <span className="flex items-center gap-1.5 text-neutral-300">
+          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-sm" /> Tag
+        </span>
       </div>
     </div>
   );

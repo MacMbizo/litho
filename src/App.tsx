@@ -14,11 +14,14 @@ import { KnowledgeGraph } from './components/graph/KnowledgeGraph';
 import { ProjectDashboard } from './components/project/ProjectDashboard';
 import { AISummaryModal } from './components/ai/AISummaryModal';
 import { AISettingsModal } from './components/ai/AISettingsModal';
+import { ToastProvider, useToast } from './components/ui/Toast';
 
 const SAVED_WORKSPACE_PATH_KEY = 'notion_active_project_path';
-const SAVED_FILES_KEY = 'notion_markdown_vault_files';
+const SAVED_SIDEBAR_WIDTH_KEY = 'notion_sidebar_width';
 
-export const App: React.FC = () => {
+const AppContent: React.FC = () => {
+  const { toast } = useToast();
+
   // Active Project Workspace (sample or local directory)
   const [workspace, setWorkspace] = useState<ProjectWorkspace>(() => {
     return getSampleWorkspace();
@@ -36,10 +39,22 @@ export const App: React.FC = () => {
   const [isRawMarkdown, setIsRawMarkdown] = useState<boolean>(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
+  // Sidebar layout state
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem(SAVED_SIDEBAR_WIDTH_KEY);
+    return saved ? parseInt(saved, 10) : 260;
+  });
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+
   // Modals
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+
+  const handleWidthChange = (w: number) => {
+    setSidebarWidth(w);
+    localStorage.setItem(SAVED_SIDEBAR_WIDTH_KEY, w.toString());
+  };
 
   // Restore previous project path if in Electron on first boot
   useEffect(() => {
@@ -50,6 +65,7 @@ export const App: React.FC = () => {
           setWorkspace(ws);
           setFiles(ws.files);
           setActiveFileId(ws.files[0]?.id || null);
+          toast('Project Restored', ws.name, 'info');
         }
       });
     }
@@ -65,6 +81,7 @@ export const App: React.FC = () => {
             if (refreshed) {
               setWorkspace(refreshed);
               setFiles(refreshed.files);
+              toast('Disk Change Detected', `Updated ${data.changedFile}`, 'info');
             }
           });
         }
@@ -75,9 +92,15 @@ export const App: React.FC = () => {
   // Global Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+S to save
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         handleSave();
+      }
+      // Ctrl+\ to toggle sidebar
+      if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
+        e.preventDefault();
+        setIsSidebarCollapsed((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -102,10 +125,10 @@ export const App: React.FC = () => {
       if (scanned.isLocalFolder && scanned.rootPath) {
         localStorage.setItem(SAVED_WORKSPACE_PATH_KEY, scanned.rootPath);
       }
-      // Prioritize opening README or first document
       const readme = scanned.files.find((f) => f.name.toLowerCase().startsWith('readme'));
       setActiveFileId(readme ? readme.id : scanned.files[0]?.id || null);
       setViewMode('project-overview');
+      toast('Project Opened', `${scanned.name} (${scanned.files.length} markdown files)`, 'success');
     }
   };
 
@@ -116,15 +139,17 @@ export const App: React.FC = () => {
       if (refreshed) {
         setWorkspace(refreshed);
         setFiles(refreshed.files);
+        toast('Project Rescanned', `${refreshed.files.length} files found`, 'info');
       }
     } else {
       const sample = getSampleWorkspace();
       setWorkspace(sample);
       setFiles(sample.files);
+      toast('Vault Reset', 'Sample files restored', 'info');
     }
   };
 
-  // Create new document (optionally in a target subfolder)
+  // Create new document
   const handleNewFile = async (type: DocType = 'document', targetFolder?: string) => {
     const template = MarkdownService.getTemplate(type as any);
     const timestamp = Date.now().toString().slice(-4);
@@ -155,7 +180,6 @@ export const App: React.FC = () => {
       isDirty: false,
     };
 
-    // If local folder, write immediately to disk
     if (workspace.isLocalFolder && fullPath) {
       await ProjectScannerService.createFile(relPath ? `${workspace.rootPath}/${relPath}` : workspace.rootPath, fileName, raw);
       handleRefreshProject();
@@ -165,6 +189,7 @@ export const App: React.FC = () => {
 
     setActiveFileId(newFile.id);
     setViewMode('editor');
+    toast('Document Created', fileName, 'success');
   };
 
   // Create new subfolder
@@ -173,6 +198,7 @@ export const App: React.FC = () => {
       const targetPath = `${parentFolder}/${folderName}`.replace(/\\/g, '/');
       await ProjectScannerService.createFolder(targetPath);
       handleRefreshProject();
+      toast('Folder Created', folderName, 'success');
     }
   };
 
@@ -184,6 +210,7 @@ export const App: React.FC = () => {
       const newFullPath = `${parentDir}/${newName}`.replace(/\\/g, '/');
       await ProjectScannerService.renamePath(node.fullPath, newFullPath);
       handleRefreshProject();
+      toast('Renamed', newName, 'success');
     }
   };
 
@@ -199,6 +226,7 @@ export const App: React.FC = () => {
         setActiveFileId(remaining[0]?.id || null);
       }
     }
+    toast('Deleted Item', id, 'info');
   };
 
   // Update file content
@@ -218,7 +246,6 @@ export const App: React.FC = () => {
         isDirty: true,
       };
 
-      // If local file, save to disk
       if (workspace.isLocalFolder && f.fullPath) {
         ProjectScannerService.saveFileToDisk(updatedFile);
       }
@@ -229,7 +256,7 @@ export const App: React.FC = () => {
     setFiles(updatedFiles);
   };
 
-  // Update specific metadata properties (from Database Table or Kanban)
+  // Update specific metadata properties
   const handleUpdateMetadata = async (fileId: string, updatedMetadata: any) => {
     const updatedFiles = files.map((f) => {
       if (f.id !== fileId) return f;
@@ -253,6 +280,7 @@ export const App: React.FC = () => {
     });
 
     setFiles(updatedFiles);
+    toast('Properties Updated', 'Frontmatter synchronized', 'success');
   };
 
   // Save active file
@@ -260,6 +288,9 @@ export const App: React.FC = () => {
     if (!activeFileId || !activeFile) return;
     if (workspace.isLocalFolder && activeFile.fullPath) {
       ProjectScannerService.saveFileToDisk(activeFile);
+      toast('Saved to Disk', activeFile.name, 'success');
+    } else {
+      toast('Document Saved', activeFile.frontmatter.title || activeFile.name, 'success');
     }
     setFiles((prev) =>
       prev.map((f) => (f.id === activeFileId ? { ...f, isDirty: false } : f))
@@ -267,8 +298,8 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className={`flex h-screen w-screen bg-[#191919] text-neutral-200 overflow-hidden font-sans ${theme}`}>
-      {/* Notion Sidebar with Hierarchical Tree */}
+    <div className={`flex h-screen w-screen bg-[#161618] text-neutral-200 overflow-hidden font-sans ${theme}`}>
+      {/* Resizable Notion Sidebar */}
       <Sidebar
         files={files}
         tree={workspace.tree}
@@ -294,10 +325,14 @@ export const App: React.FC = () => {
           setActiveFileId(file.id);
           setAiModalOpen(true);
         }}
+        width={sidebarWidth}
+        onWidthChange={handleWidthChange}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
       />
 
       {/* Main Workspace Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#191919]">
+      <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#161618]">
         {/* Top Navbar */}
         <TopNav
           activeFile={activeFile}
@@ -306,6 +341,9 @@ export const App: React.FC = () => {
           isRawMarkdown={isRawMarkdown}
           onToggleRawMarkdown={() => setIsRawMarkdown(!isRawMarkdown)}
           onSave={handleSave}
+          isSidebarCollapsed={isSidebarCollapsed}
+          onToggleSidebar={() => setIsSidebarCollapsed(false)}
+          onOpenProjectOverview={() => setViewMode('project-overview')}
         />
 
         {/* View Switcher Container */}
@@ -427,5 +465,13 @@ export const App: React.FC = () => {
         onClose={() => setSettingsModalOpen(false)}
       />
     </div>
+  );
+};
+
+export const App: React.FC = () => {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
   );
 };
