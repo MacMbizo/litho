@@ -5,6 +5,7 @@ import { MarkdownService } from './services/markdown';
 import { ProjectScannerService } from './services/projectScanner';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopNav } from './components/layout/TopNav';
+import { TabBar } from './components/layout/TabBar';
 import { CommandPalette } from './components/layout/CommandPalette';
 import { NotionEditor } from './components/editor/NotionEditor';
 import { DatabaseHub } from './components/database/DatabaseHub';
@@ -14,6 +15,7 @@ import { KnowledgeGraph } from './components/graph/KnowledgeGraph';
 import { ProjectDashboard } from './components/project/ProjectDashboard';
 import { AISummaryModal } from './components/ai/AISummaryModal';
 import { AISettingsModal } from './components/ai/AISettingsModal';
+import { ProjectChatDrawer } from './components/ai/ProjectChatDrawer';
 import { ToastProvider, useToast } from './components/ui/Toast';
 
 const SAVED_WORKSPACE_PATH_KEY = 'notion_active_project_path';
@@ -35,6 +37,10 @@ const AppContent: React.FC = () => {
     return files[0]?.id || null;
   });
 
+  const [openFileIds, setOpenFileIds] = useState<string[]>(() => {
+    return files[0] ? [files[0].id] : [];
+  });
+
   const [viewMode, setViewMode] = useState<ViewMode>('editor');
   const [isRawMarkdown, setIsRawMarkdown] = useState<boolean>(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -46,14 +52,36 @@ const AppContent: React.FC = () => {
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
-  // Modals
+  // Modals & Drawers
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [projectChatOpen, setProjectChatOpen] = useState(false);
 
   const handleWidthChange = (w: number) => {
     setSidebarWidth(w);
     localStorage.setItem(SAVED_SIDEBAR_WIDTH_KEY, w.toString());
+  };
+
+  // Switch/Open active file with multi-document tabs
+  const handleSelectFile = useCallback((id: string) => {
+    setActiveFileId(id);
+    setOpenFileIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setViewMode('editor');
+  }, []);
+
+  // Close tab
+  const handleCloseTab = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextOpen = openFileIds.filter((tabId) => tabId !== id);
+    setOpenFileIds(nextOpen);
+    if (activeFileId === id) {
+      if (nextOpen.length > 0) {
+        setActiveFileId(nextOpen[nextOpen.length - 1]);
+      } else {
+        setActiveFileId(null);
+      }
+    }
   };
 
   // Restore previous project path if in Electron on first boot
@@ -64,7 +92,9 @@ const AppContent: React.FC = () => {
         if (ws) {
           setWorkspace(ws);
           setFiles(ws.files);
-          setActiveFileId(ws.files[0]?.id || null);
+          const firstId = ws.files[0]?.id || null;
+          setActiveFileId(firstId);
+          setOpenFileIds(firstId ? [firstId] : []);
           toast('Project Restored', ws.name, 'info');
         }
       });
@@ -126,7 +156,9 @@ const AppContent: React.FC = () => {
         localStorage.setItem(SAVED_WORKSPACE_PATH_KEY, scanned.rootPath);
       }
       const readme = scanned.files.find((f) => f.name.toLowerCase().startsWith('readme'));
-      setActiveFileId(readme ? readme.id : scanned.files[0]?.id || null);
+      const initialId = readme ? readme.id : scanned.files[0]?.id || null;
+      setActiveFileId(initialId);
+      setOpenFileIds(initialId ? [initialId] : []);
       setViewMode('project-overview');
       toast('Project Opened', `${scanned.name} (${scanned.files.length} markdown files)`, 'success');
     }
@@ -139,12 +171,14 @@ const AppContent: React.FC = () => {
       if (refreshed) {
         setWorkspace(refreshed);
         setFiles(refreshed.files);
+        setOpenFileIds((prev) => prev.filter((id) => refreshed.files.some((f) => f.id === id)));
         toast('Project Rescanned', `${refreshed.files.length} files found`, 'info');
       }
     } else {
       const sample = getSampleWorkspace();
       setWorkspace(sample);
       setFiles(sample.files);
+      setOpenFileIds((prev) => prev.filter((id) => sample.files.some((f) => f.id === id)));
       toast('Vault Reset', 'Sample files restored', 'info');
     }
   };
@@ -188,6 +222,7 @@ const AppContent: React.FC = () => {
     }
 
     setActiveFileId(newFile.id);
+    setOpenFileIds((prev) => (prev.includes(newFile.id) ? prev : [...prev, newFile.id]));
     setViewMode('editor');
     toast('Document Created', fileName, 'success');
   };
@@ -216,6 +251,7 @@ const AppContent: React.FC = () => {
 
   // Delete file or folder
   const handleDeleteFile = async (id: string, fullPath?: string) => {
+    setOpenFileIds((prev) => prev.filter((tabId) => tabId !== id));
     if (workspace.isLocalFolder && fullPath) {
       await ProjectScannerService.deletePath(fullPath);
       handleRefreshProject();
@@ -305,10 +341,7 @@ const AppContent: React.FC = () => {
         tree={workspace.tree}
         project={workspace}
         activeFileId={activeFileId}
-        onSelectFile={(id) => {
-          setActiveFileId(id);
-          setViewMode('editor');
-        }}
+        onSelectFile={handleSelectFile}
         onNewFile={handleNewFile}
         onNewFolder={handleNewFolder}
         onRenameNode={handleRenameNode}
@@ -322,7 +355,7 @@ const AppContent: React.FC = () => {
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onAIAssist={(file) => {
-          setActiveFileId(file.id);
+          handleSelectFile(file.id);
           setAiModalOpen(true);
         }}
         width={sidebarWidth}
@@ -338,6 +371,7 @@ const AppContent: React.FC = () => {
           activeFile={activeFile}
           onOpenAIModal={() => setAiModalOpen(true)}
           onOpenAgentTester={() => setViewMode('agent-hub')}
+          onOpenProjectChat={() => setProjectChatOpen(true)}
           isRawMarkdown={isRawMarkdown}
           onToggleRawMarkdown={() => setIsRawMarkdown(!isRawMarkdown)}
           onSave={handleSave}
@@ -346,15 +380,22 @@ const AppContent: React.FC = () => {
           onOpenProjectOverview={() => setViewMode('project-overview')}
         />
 
+        {/* Multi-Document Tab Bar */}
+        <TabBar
+          openFileIds={openFileIds}
+          activeFileId={activeFileId}
+          files={files}
+          onSelectTab={handleSelectFile}
+          onCloseTab={handleCloseTab}
+          onNewTab={() => handleNewFile('document')}
+        />
+
         {/* View Switcher Container */}
         <div className="flex-1 overflow-hidden relative">
           {viewMode === 'project-overview' && (
             <ProjectDashboard
               project={workspace}
-              onSelectFile={(id) => {
-                setActiveFileId(id);
-                setViewMode('editor');
-              }}
+              onSelectFile={handleSelectFile}
               onSelectViewMode={setViewMode}
               onNewFile={() => handleNewFile('document')}
               onRefreshProject={handleRefreshProject}
@@ -367,6 +408,8 @@ const AppContent: React.FC = () => {
               onChange={handleFileChange}
               isRawMarkdown={isRawMarkdown}
               onOpenAIModal={() => setAiModalOpen(true)}
+              allFiles={files}
+              onSelectFile={handleSelectFile}
             />
           )}
 
@@ -379,14 +422,11 @@ const AppContent: React.FC = () => {
           {viewMode === 'database' && (
             <DatabaseHub
               files={files}
-              onSelectFile={(id) => {
-                setActiveFileId(id);
-                setViewMode('editor');
-              }}
+              onSelectFile={handleSelectFile}
               onUpdateMetadata={handleUpdateMetadata}
               onNewFile={handleNewFile}
               onRunAgent={(agent) => {
-                setActiveFileId(agent.id);
+                handleSelectFile(agent.id);
                 setViewMode('agent-hub');
               }}
             />
@@ -396,10 +436,7 @@ const AppContent: React.FC = () => {
             <AgentPlayground
               files={files}
               initialAgentId={activeFile?.frontmatter.type === 'agent' ? activeFile.id : undefined}
-              onSelectAgentFile={(id) => {
-                setActiveFileId(id);
-                setViewMode('editor');
-              }}
+              onSelectAgentFile={handleSelectFile}
             />
           )}
 
@@ -409,8 +446,7 @@ const AppContent: React.FC = () => {
               onSelectFile={(path) => {
                 const target = files.find((f) => f.path === path || f.id === path);
                 if (target) {
-                  setActiveFileId(target.id);
-                  setViewMode('editor');
+                  handleSelectFile(target.id);
                 }
               }}
               onUpdateFileContent={(fileId, newContent) => {
@@ -422,10 +458,7 @@ const AppContent: React.FC = () => {
           {viewMode === 'graph' && (
             <KnowledgeGraph
               files={files}
-              onSelectFile={(id) => {
-                setActiveFileId(id);
-                setViewMode('editor');
-              }}
+              onSelectFile={handleSelectFile}
             />
           )}
         </div>
@@ -436,12 +469,21 @@ const AppContent: React.FC = () => {
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
         files={files}
-        onSelectFile={(id) => {
-          setActiveFileId(id);
-          setViewMode('editor');
-        }}
+        onSelectFile={handleSelectFile}
         onSelectViewMode={setViewMode}
         onNewFile={handleNewFile}
+      />
+
+      {/* Vault / Project RAG Chat Drawer */}
+      <ProjectChatDrawer
+        isOpen={projectChatOpen}
+        onClose={() => setProjectChatOpen(false)}
+        projectName={workspace.name}
+        files={files}
+        onSelectFile={(id) => {
+          handleSelectFile(id);
+          setProjectChatOpen(false);
+        }}
       />
 
       {/* AI Intelligence Modal */}

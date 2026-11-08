@@ -17,7 +17,8 @@ import {
   FileCode,
   Check,
   PanelLeftOpen,
-  Folder
+  Folder,
+  MessageSquare
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
 
@@ -25,6 +26,7 @@ interface TopNavProps {
   activeFile: MarkdownFile | null;
   onOpenAIModal: () => void;
   onOpenAgentTester?: () => void;
+  onOpenProjectChat?: () => void;
   isRawMarkdown: boolean;
   onToggleRawMarkdown: () => void;
   onSave: () => void;
@@ -37,6 +39,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   activeFile,
   onOpenAIModal,
   onOpenAgentTester,
+  onOpenProjectChat,
   isRawMarkdown,
   onToggleRawMarkdown,
   onSave,
@@ -179,6 +182,18 @@ export const TopNav: React.FC<TopNavProps> = ({
           <Sparkles className="w-3.5 h-3.5 text-purple-400" />
           <span>AI Assist</span>
         </button>
+
+        {/* Project AI Chat / RAG */}
+        {onOpenProjectChat && (
+          <button
+            onClick={onOpenProjectChat}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#202024] hover:bg-[#28282e] border border-[#333338] text-neutral-300 hover:text-white transition shadow-sm font-medium"
+            title="Chat with entire vault / project knowledge base"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden md:inline">Ask Vault</span>
+          </button>
+        )}
 
         {/* Test Agent button if type is agent */}
         {type === 'agent' && onOpenAgentTester && (

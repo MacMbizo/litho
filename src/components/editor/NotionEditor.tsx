@@ -25,6 +25,7 @@ import { MarkdownFile } from '../../types/document';
 import { FrontmatterMeta } from './FrontmatterMeta';
 import { SlashMenu, SlashMenuItem } from './SlashMenu';
 import { FloatingSelectionToolbar } from './FloatingSelectionToolbar';
+import { BacklinksPanel } from './BacklinksPanel';
 import { MarkdownService } from '../../services/markdown';
 
 interface NotionEditorProps {
@@ -32,6 +33,8 @@ interface NotionEditorProps {
   onChange: (updatedContent: string, updatedFrontmatter?: any) => void;
   isRawMarkdown: boolean;
   onOpenAIModal?: () => void;
+  allFiles?: MarkdownFile[];
+  onSelectFile?: (id: string) => void;
 }
 
 export const NotionEditor: React.FC<NotionEditorProps> = ({
@@ -39,6 +42,8 @@ export const NotionEditor: React.FC<NotionEditorProps> = ({
   onChange,
   isRawMarkdown,
   onOpenAIModal,
+  allFiles,
+  onSelectFile,
 }) => {
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
@@ -592,6 +597,15 @@ export const NotionEditor: React.FC<NotionEditorProps> = ({
               </div>
             </div>
           </div>
+        )}
+
+        {/* Linked References / Backlinks */}
+        {allFiles && onSelectFile && (
+          <BacklinksPanel
+            activeFile={file}
+            allFiles={allFiles}
+            onSelectFile={onSelectFile}
+          />
         )}
 
         {/* Floating Text Selection Toolbar */}
