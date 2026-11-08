@@ -1,0 +1,50 @@
+{
+  "name": "notion-markdown-studio",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Local-first Notion-style Markdown Studio, Agent Database, and Project Management OS",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build:renderer": "tsc && vite build",
+    "build:electron": "esbuild electron/main.ts electron/preload.ts --platform=node --outdir=dist-electron --out-extension:.js=.cjs --format=cjs --bundle --external:electron",
+    "build": "npm run build:renderer && npm run build:electron",
+    "start": "electron .",
+    "test": "esbuild tests/markdown.test.ts --bundle --platform=node --outfile=tests/dist/markdown.test.cjs && node --test tests/dist/markdown.test.cjs",
+    "lint": "eslint ."
+  },
+  "keywords": [
+    "markdown",
+    "notion",
+    "local-first",
+    "agent-hub",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.1.0",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.13.4",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^34.2.0",
+    "esbuild": "^0.25.0",
+    "postcss": "^8.5.2",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vite-plugin-electron": "^0.29.0",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  }
+}
