@@ -203,4 +203,28 @@ export class MarkdownService {
 
     return this.stringify(mergedFrontmatter, parsed.body);
   }
+
+  /**
+   * Extract [[Wiki-Links]] from markdown body
+   * Supports [[Document Title]] and [[target/path|Display Alias]]
+   */
+  static extractWikiLinks(body: string): { raw: string; target: string; alias: string }[] {
+    const links: { raw: string; target: string; alias: string }[] = [];
+    const regex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(body)) !== null) {
+      const target = match[1].trim();
+      const alias = (match[2] || match[1]).trim();
+      if (target) {
+        links.push({
+          raw: match[0],
+          target,
+          alias,
+        });
+      }
+    }
+
+    return links;
+  }
 }

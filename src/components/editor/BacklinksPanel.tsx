@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link2, FileText, Bot, Wrench, Layers, ExternalLink } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
+import { MarkdownService } from '../../services/markdown';
 
 interface BacklinksPanelProps {
   activeFile: MarkdownFile;
@@ -16,9 +17,22 @@ export const BacklinksPanel: React.FC<BacklinksPanelProps> = ({
   const fileNameWithoutExt = activeFile.name.replace(/\.[^/.]+$/, '');
   const title = activeFile.frontmatter.title || '';
 
-  // Find files that mention this file
+  const isExplicitWikiLink = (other: MarkdownFile) => {
+    const wikiLinks = MarkdownService.extractWikiLinks(other.body);
+    return wikiLinks.some((wl) => {
+      const target = wl.target.toLowerCase();
+      return (
+        target === fileNameWithoutExt.toLowerCase() ||
+        (title && target === title.toLowerCase()) ||
+        target === activeFile.path.toLowerCase()
+      );
+    });
+  };
+
+  // Find files that mention or [[Wiki-Link]] this file
   const backlinks = allFiles.filter((other) => {
     if (other.id === activeFile.id) return false;
+    if (isExplicitWikiLink(other)) return true;
     const body = other.body.toLowerCase();
     const mentionsName = body.includes(fileNameWithoutExt.toLowerCase());
     const mentionsTitle = title && body.includes(title.toLowerCase());
@@ -69,6 +83,11 @@ export const BacklinksPanel: React.FC<BacklinksPanelProps> = ({
                 <div className="flex items-center gap-2 font-medium text-xs text-neutral-200 group-hover:text-white truncate">
                   {getDocIcon(linkFile.frontmatter.type)}
                   <span className="truncate">{linkFile.frontmatter.title || linkFile.name}</span>
+                  {isExplicitWikiLink(linkFile) && (
+                    <span className="px-1.5 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-[9px] text-blue-300 font-mono">
+                      [[Wiki-Link]]
+                    </span>
+                  )}
                 </div>
                 <ExternalLink className="w-3 h-3 text-neutral-500 group-hover:text-neutral-300" />
               </div>

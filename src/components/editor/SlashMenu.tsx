@@ -11,7 +11,10 @@ import {
   Minus, 
   Bot, 
   Wrench,
-  Sparkles
+  Sparkles,
+  Link2,
+  GitBranch,
+  Sigma
 } from 'lucide-react';
 
 export interface SlashMenuItem {
@@ -102,6 +105,34 @@ export const SlashMenu: React.FC<SlashMenuProps> = ({
       description: 'Visual horizontal line',
       icon: <Minus className="w-4 h-4 text-neutral-500" />,
       insertText: '\n---\n\n',
+    },
+    {
+      id: 'wikilink',
+      title: 'Wiki-Link [[Document]]',
+      description: 'Link to another document, agent, or skill in vault',
+      icon: <Link2 className="w-4 h-4 text-blue-400" />,
+      insertText: '[[',
+    },
+    {
+      id: 'mermaid_flow',
+      title: 'Mermaid Flowchart',
+      description: 'Interactive flowchart diagram block',
+      icon: <GitBranch className="w-4 h-4 text-indigo-400" />,
+      insertText: '```mermaid\nflowchart LR\n  Start([User Request]) --> Agent[AI Agent]\n  Agent --> Decision{Valid?}\n  Decision -->|Yes| Output([Execute Task])\n  Decision -->|No| Retry[Refine Prompt]\n```\n',
+    },
+    {
+      id: 'mermaid_seq',
+      title: 'Mermaid Sequence Diagram',
+      description: 'Interactive actor sequence diagram',
+      icon: <GitBranch className="w-4 h-4 text-sky-400" />,
+      insertText: '```mermaid\nsequenceDiagram\n  participant User\n  participant Agent\n  participant Vault\n  User->>Agent: Query Knowledge Base\n  Agent->>Vault: Retrieve [[Wiki-Links]]\n  Vault-->>Agent: Relevant Context\n  Agent-->>User: Cited Response\n```\n',
+    },
+    {
+      id: 'math',
+      title: 'Math Equation (LaTeX)',
+      description: 'Display mathematical formula block ($$...$$)',
+      icon: <Sigma className="w-4 h-4 text-amber-400" />,
+      insertText: '$$\n\\mathcal{L}(\\theta) = \\frac{1}{N} \\sum_{i=1}^{N} \\left( y_i - \\hat{y}_i \\right)^2 + \\lambda \\|\\theta\\|^2\n$$\n',
     },
     {
       id: 'agent_spec',

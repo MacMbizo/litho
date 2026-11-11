@@ -124,12 +124,21 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ files, onSelectF
       });
     }
 
-    // 3. Detect internal links / references inside markdown body (e.g. "project-nexus" or agent mentions)
+    // 3. Detect internal [[Wiki-Links]] and references inside markdown body
     files.forEach((fileA) => {
+      const bodyLower = fileA.body.toLowerCase();
       files.forEach((fileB) => {
         if (fileA.id !== fileB.id) {
-          const nameWithoutExt = fileB.name.replace('.md', '');
-          if (fileA.body.includes(nameWithoutExt) || fileA.body.includes(fileB.path)) {
+          const nameWithoutExt = fileB.name.replace(/\.[^/.]+$/, '').toLowerCase();
+          const titleLower = (fileB.frontmatter.title || '').toLowerCase();
+          const pathLower = fileB.path.toLowerCase();
+
+          const matchesRef =
+            bodyLower.includes(nameWithoutExt) ||
+            bodyLower.includes(pathLower) ||
+            (titleLower.length > 2 && bodyLower.includes(`[[${titleLower}`));
+
+          if (matchesRef) {
             if (nodes.some((n) => n.id === fileA.id) && nodes.some((n) => n.id === fileB.id)) {
               links.push({ source: fileA.id, target: fileB.id });
             }

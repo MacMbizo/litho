@@ -32,10 +32,23 @@ Project Nexus delivers zero-latency, private, and deterministic execution of rea
 - [ ] Package production release binary
 
 ## Architecture Overview
-The system relies on a triple-layer reactive architecture:
+The system relies on a triple-layer reactive architecture coordinating [[Senior Code Reviewer Agent]] and [[Executive Briefing & Doc Synthesizer]]:
 1. **Physical Storage**: 100% human-readable Markdown files stored in user-designated directories.
 2. **Metadata Ingest**: High-throughput frontmatter tokenizer parsing key attributes on change.
 3. **Reactive UI State**: Notion-grade block editor, multi-view database boards, and global task aggregators.
+
+\`\`\`mermaid
+flowchart LR
+  Vault([Markdown Vault]) --> Parser[YAML + AST Engine]
+  Parser --> Graph{Knowledge Graph}
+  Graph -->|Context| Agent[[Senior Code Reviewer]]
+  Graph -->|RAG| Chat([Vault AI Chat])
+\`\`\`
+
+## Relevance Scoring Formula
+$$
+S(q, d) = \\sum_{i=1}^{n} \\frac{\\text{tf}(q_i, d) \\cdot \\alpha}{1 + \\lambda \\cdot \\Delta t}
+$$
 
 ## Team Notes
 * Ensure all database columns remain strictly synchronized with the underlying markdown frontmatter.

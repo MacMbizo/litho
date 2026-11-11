@@ -92,3 +92,15 @@ test('MarkdownService: upgradeRawMarkdown prepends clean YAML header without alt
   assert.deepStrictEqual(parsed.frontmatter.tags, ['system', 'design']);
   assert.ok(parsed.body.includes('Here are system design notes.'));
 });
+
+test('MarkdownService: extractWikiLinks parses standard and aliased wiki-links', () => {
+  const body = `Coordinate with [[Senior Code Reviewer Agent]] and see [[projects/project-nexus|Project Nexus Roadmap]] for details.`;
+  const links = MarkdownService.extractWikiLinks(body);
+
+  assert.strictEqual(links.length, 2);
+  assert.strictEqual(links[0].target, 'Senior Code Reviewer Agent');
+  assert.strictEqual(links[0].alias, 'Senior Code Reviewer Agent');
+  assert.strictEqual(links[1].target, 'projects/project-nexus');
+  assert.strictEqual(links[1].alias, 'Project Nexus Roadmap');
+});
+
