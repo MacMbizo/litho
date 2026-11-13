@@ -588,12 +588,7 @@ export function auditProjectDocumentation(
     score -= Math.round(60 * (weightedProblems / inventory.length)) + Math.min(problemDocs, 5);
   }
 
-  // Runtime drift: critical SDKs weigh most; capped so stack age cannot dominate documentation health.
-  const stackPenalty = stackProfile.dependencies.reduce(
-    (acc, d) => acc + (d.severity === 'critical' ? 8 : d.severity === 'outdated' ? 2 : 0),
-    0
-  );
-  score -= Math.min(stackPenalty, 20);
+  // Stack age is scored separately (see stackFreshness.ts) so the doc grade reflects documentation only.
 
   const healthScore = Math.max(0, Math.min(100, Math.round(score)));
   const grade: ProjectDocAuditReport['grade'] =

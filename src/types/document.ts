@@ -58,6 +58,8 @@ export interface ProjectWorkspace {
   tree: FileTreeNode;
   files: MarkdownFile[];
   configFiles?: Record<string, string>;
+  /** Per app folder ('' = root): whether node_modules exists and installed versions of key packages. */
+  installedPackages?: Record<string, { present: boolean; versions: Record<string, string> }>;
 }
 
 export type ViewMode = 'editor' | 'database' | 'tasks' | 'agent-hub' | 'graph' | 'project-overview' | 'portfolio';
