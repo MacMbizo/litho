@@ -10,7 +10,7 @@
     "build:electron": "esbuild electron/main.ts electron/preload.ts --platform=node --outdir=dist-electron --out-extension:.js=.cjs --format=cjs --bundle --external:electron",
     "build": "npm run build:renderer && npm run build:electron",
     "start": "electron .",
-    "test": "esbuild tests/markdown.test.ts tests/docatlas.test.ts tests/notes.test.ts --bundle --platform=node --outdir=tests/dist --out-extension:.js=.cjs && node --test tests/dist/markdown.test.cjs tests/dist/docatlas.test.cjs tests/dist/notes.test.cjs",
+    "test": "esbuild tests/markdown.test.ts tests/docatlas.test.ts tests/notes.test.ts tests/brand.test.ts --bundle --platform=node --outdir=tests/dist --out-extension:.js=.cjs && node --test tests/dist/markdown.test.cjs tests/dist/docatlas.test.cjs tests/dist/notes.test.cjs tests/dist/brand.test.cjs",
     "lint": "eslint ."
   },
   "keywords": [
