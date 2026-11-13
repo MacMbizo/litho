@@ -128,6 +128,9 @@ export function resolveRelativeDocPath(fromFilePath: string, linkTarget: string)
   return parts.join('/');
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const STALE_AFTER_DAYS = 180;
+
 /** Well-known local dev-server ports. Database / service ports (5432, 6379, 54321...) are never treated as drift. */
 export const DEV_SERVER_PORTS = [3000, 3001, 4000, 4200, 5000, 5173, 5174, 8000, 8080, 8081, 8501, 19000, 19006];
 
@@ -158,11 +161,31 @@ export function findExpoSdkDrift(body: string, expoSdkVersion?: string): number 
   return null;
 }
 
+/**
+ * Documents that are historical records by design (ADRs, RFCs, changelogs, licences) or explicitly
+ * marked `evergreen: true` never go stale merely by age.
+ */
+function isAgeExempt(file: MarkdownFile): boolean {
+  if (file.frontmatter.evergreen === true) return true;
+  const lowerPath = file.path.toLowerCase();
+  const name = lowerPath.split('/').pop() || '';
+  if (/(^|\/)(adrs?|decisions|rfcs?)\//.test(lowerPath)) return true;
+  if (/^(adr|rfc)[-_ ]?\d+/.test(name) || /^\d{3,4}[-_]/.test(name)) return true;
+  return /^(changelog|history|license|licence|code_of_conduct|code-of-conduct|contributing|security|notice)(\.|$)/.test(name);
+}
+
+function isInArchiveFolder(filePath: string): boolean {
+  return filePath
+    .toLowerCase()
+    .split('/')
+    .slice(0, -1)
+    .some((d) => /^_?(archived?|deprecated|legacy|obsolete|old)$/.test(d));
+}
+
 function isDeprecatedDoc(file: MarkdownFile): boolean {
   if (file.frontmatter.status === 'Archived' || file.frontmatter.deprecated === true) return true;
+  if (isInArchiveFolder(file.path)) return true;
   const segments = file.path.toLowerCase().split('/');
-  const dirs = segments.slice(0, -1);
-  if (dirs.some((d) => /^_?(deprecated|legacy|obsolete|archived?|old)$/.test(d))) return true;
   if (/(^|[-_. ])(deprecated|legacy|obsolete)([-_. ]|$)/.test(segments[segments.length - 1])) return true;
   const head = file.body.slice(0, 400);
   return /^\s*(?:>\s*)?(?:\[![a-z]+\]\s*)?(?:\*\*|__)?\s*(deprecated|obsolete)\b/im.test(head);
@@ -303,6 +326,7 @@ export function auditProjectDocumentation(
 ): ProjectDocAuditReport {
   const files = project.files;
   const pathSet = new Set(files.map((f) => f.path.toLowerCase()));
+  const latestActivityMs = files.reduce((max, f) => Math.max(max, f.lastModifiedMs || 0), 0);
 
   // Track inbound references (both markdown relative links and wiki links)
   const inboundCount = new Map<string, number>();
@@ -474,10 +498,14 @@ export function auditProjectDocumentation(
       issues.push('Near-empty stub document (<15 words)');
     }
 
-    // 5. Age check (>180 days without edit)
-    const ageDays = file.lastModifiedMs ? (nowMs - file.lastModifiedMs) / (1000 * 60 * 60 * 24) : 0;
-    if (ageDays > 180) {
-      issues.push(`Not updated in ${Math.round(ageDays)} days`);
+    // 5. Age check: >180 days behind the project's most recent doc edit. Judging against the wall clock
+    // would mark every doc of a dormant project stale, which is noise rather than drift.
+    if (file.lastModifiedMs && latestActivityMs && !isAgeExempt(file)) {
+      const behindDays = (latestActivityMs - file.lastModifiedMs) / DAY_MS;
+      if (behindDays > STALE_AFTER_DAYS) {
+        const ageDays = Math.round((nowMs - file.lastModifiedMs) / DAY_MS);
+        issues.push(`Not updated in ${ageDays} days while the project kept changing`);
+      }
     }
 
     // Classify status (mutually exclusive, highest precedence first)
@@ -542,16 +570,32 @@ export function auditProjectDocumentation(
     if (m.priority === 'critical') score -= 18;
     else if (m.priority === 'recommended') score -= 8;
   }
-  score -= counts.duplicate * 6;
-  score -= counts.stale * 5;
-  score -= counts.deprecated * 3;
-  score -= counts.orphan * 4;
 
-  // Penalize critical SDK drift in stack
-  const criticalStackCount = stackProfile.dependencies.filter((d) => d.severity === 'critical').length;
-  score -= criticalStackCount * 8;
+  // Document problems are scored as a weighted share of the project (so large repos are judged fairly),
+  // plus a small capped absolute term so a single problem in a big repo still registers.
+  // Docs already moved into an archive folder are resolved and cost nothing.
+  const PROBLEM_WEIGHT: Partial<Record<DocTaxonomyStatus, number>> = { duplicate: 1, stale: 0.8, orphan: 0.5, deprecated: 0.3 };
+  let weightedProblems = 0;
+  let problemDocs = 0;
+  for (const item of inventory) {
+    const weight = PROBLEM_WEIGHT[item.status];
+    if (!weight) continue;
+    if (item.status === 'deprecated' && isInArchiveFolder(item.path)) continue;
+    weightedProblems += weight;
+    problemDocs++;
+  }
+  if (inventory.length > 0) {
+    score -= Math.round(60 * (weightedProblems / inventory.length)) + Math.min(problemDocs, 5);
+  }
 
-  const healthScore = Math.max(15, Math.min(100, score));
+  // Runtime drift: critical SDKs weigh most; capped so stack age cannot dominate documentation health.
+  const stackPenalty = stackProfile.dependencies.reduce(
+    (acc, d) => acc + (d.severity === 'critical' ? 8 : d.severity === 'outdated' ? 2 : 0),
+    0
+  );
+  score -= Math.min(stackPenalty, 20);
+
+  const healthScore = Math.max(0, Math.min(100, Math.round(score)));
   const grade: ProjectDocAuditReport['grade'] =
     healthScore >= 85 ? 'A' : healthScore >= 70 ? 'B' : healthScore >= 50 ? 'C' : 'D';
 

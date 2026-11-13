@@ -367,8 +367,8 @@ export function getSampleWorkspace(): ProjectWorkspace {
           name: 'nexus-workspace',
           private: true,
           scripts: { dev: 'vite', build: 'tsc && vite build', test: 'node --test' },
-          dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0' },
-          devDependencies: { vite: '^5.4.0', typescript: '^5.4.0', electron: '^30.0.0', tailwindcss: '^3.4.0' },
+          dependencies: { react: '^19.1.0', 'react-dom': '^19.1.0' },
+          devDependencies: { vite: '^7.1.0', typescript: '^5.9.0', electron: '^43.0.0', tailwindcss: '^4.1.0' },
         },
         null,
         2

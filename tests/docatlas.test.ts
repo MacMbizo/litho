@@ -215,3 +215,57 @@ test('Sample vault demonstrates every actionable DocPassport state', async () =>
   assert.ok(report.missingDocs.some((m) => m.id === 'architecture'));
   assert.strictEqual(sample.tree.children!.some((c) => c.name === 'packages' && c.isFolder), true);
 });
+
+test('Auditor: age is judged relative to project activity, not wall clock', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const dormant = auditProjectDocumentation(
+    ws([
+      makeDoc('README.md', `# Root\n\n${LONG}`, NOW - 500 * day),
+      makeDoc('docs/guide.md', `# Guide\n\n${LONG}`, NOW - 490 * day),
+    ]),
+    inspectProjectStack(ws([])),
+    NOW
+  );
+  assert.strictEqual(dormant.counts.stale, 0, 'a dormant project is not stale doc-by-doc');
+
+  const active = auditProjectDocumentation(
+    ws([
+      makeDoc('README.md', `# Root\n\n${LONG}`, NOW),
+      makeDoc('docs/guide.md', `# Guide\n\n${LONG}`, NOW - 300 * day),
+    ]),
+    inspectProjectStack(ws([])),
+    NOW
+  );
+  assert.strictEqual(active.inventory.find((i) => i.path === 'docs/guide.md')!.status, 'stale');
+});
+
+test('Auditor: health is proportional and archived docs cost nothing', () => {
+  const docs = [makeDoc('README.md', `# Root\n\n${LONG}`), makeDoc('ARCHITECTURE.md', `# Arch\n\n${LONG}`), makeDoc('DEPLOYMENT.md', `# Deploy\n\n${LONG}`)];
+  for (let i = 0; i < 40; i++) docs.push(makeDoc(`archive/old-${i}.md`, `# Old ${i}\n\n${LONG}`));
+  for (let i = 0; i < 60; i++) docs.push(makeDoc(`docs/topic-${i}.md`, `# Topic ${i}\n\n${LONG}`));
+  const report = auditProjectDocumentation(ws(docs), inspectProjectStack(ws([])), NOW);
+  assert.strictEqual(report.counts.deprecated, 40);
+  assert.strictEqual(report.grade, 'A');
+});
+
+test('Auditor: ADRs, changelogs and evergreen docs are exempt from age staleness', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const report = auditProjectDocumentation(
+    ws([
+      makeDoc('README.md', `# Root\n\n${LONG}`, NOW),
+      makeDoc('adrs/0001-model-adapters.md', `# ADR 1\n\n${LONG}`, NOW - 400 * day),
+      makeDoc('docs/adr-002-storage.md', `# ADR 2\n\n${LONG}`, NOW - 400 * day),
+      makeDoc('CHANGELOG.md', `# Changelog\n\n${LONG}`, NOW - 400 * day),
+      makeDoc('docs/glossary.md', `---\nevergreen: true\n---\n\n# Glossary\n\n${LONG}`, NOW - 400 * day),
+      makeDoc('docs/setup.md', `# Setup\n\n${LONG}`, NOW - 400 * day),
+    ]),
+    inspectProjectStack(ws([])),
+    NOW
+  );
+  const st = (p: string) => report.inventory.find((i) => i.path === p)!.status;
+  assert.notStrictEqual(st('adrs/0001-model-adapters.md'), 'stale');
+  assert.notStrictEqual(st('docs/adr-002-storage.md'), 'stale');
+  assert.notStrictEqual(st('CHANGELOG.md'), 'stale');
+  assert.notStrictEqual(st('docs/glossary.md'), 'stale');
+  assert.strictEqual(st('docs/setup.md'), 'stale');
+});
