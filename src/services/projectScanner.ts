@@ -6,12 +6,13 @@ declare global {
   interface Window {
     electronAPI?: {
       openDirectory: () => Promise<string | null>;
-      scanDirectory: (dirPath: string) => Promise<{
+      scanDirectory: (dirPath: string, opts?: { watch?: boolean }) => Promise<{
         rootPath: string;
         rootName: string;
         files: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }>;
         tree: any;
         configFiles?: Record<string, string>;
+        installedPackages?: ProjectWorkspace['installedPackages'];
       }>;
       scanPortfolioRoot: (dirPath: string) => Promise<{
         rootPath: string;
@@ -21,6 +22,7 @@ declare global {
           files: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }>;
           tree: any;
           configFiles?: Record<string, string>;
+          installedPackages?: ProjectWorkspace['installedPackages'];
         }>;
       }>;
       readFile: (filePath: string) => Promise<string>;
@@ -31,6 +33,8 @@ declare global {
       deletePath: (targetPath: string) => Promise<boolean>;
       revealInExplorer: (targetPath: string) => Promise<boolean>;
       fetchJson: (url: string) => Promise<any>;
+      storeRead?: (name: string) => Promise<any>;
+      storeWrite?: (name: string, data: unknown) => Promise<boolean>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }
@@ -78,10 +82,10 @@ export class ProjectScannerService {
   /**
    * Scan specific path via Electron
    */
-  static async scanPath(dirPath: string): Promise<ProjectWorkspace | null> {
+  static async scanPath(dirPath: string, opts?: { watch?: boolean }): Promise<ProjectWorkspace | null> {
     if (!this.isElectron()) return null;
 
-    const result = await window.electronAPI!.scanDirectory(dirPath);
+    const result = await window.electronAPI!.scanDirectory(dirPath, opts);
     if (!result) return null;
 
     const files: MarkdownFile[] = result.files.map((raw) => {
@@ -110,6 +114,7 @@ export class ProjectScannerService {
       tree: enrichedTree,
       files,
       configFiles: result.configFiles || {},
+      installedPackages: result.installedPackages,
     };
   }
 
@@ -152,7 +157,27 @@ export class ProjectScannerService {
         'wrangler.toml',
         '.firebaserc',
         'supabase/config.toml',
+        'vite.config.ts',
+        'vite.config.js',
+        '.nvmrc',
+        '.node-version',
+        '.python-version',
+        'runtime.txt',
       ]);
+      const NESTED_CONFIG_NAMES = new Set([
+        'package.json',
+        'app.json',
+        'app.config.json',
+        'app.config.ts',
+        'app.config.js',
+        'eas.json',
+        'pyproject.toml',
+        'requirements.txt',
+        'Dockerfile',
+        '.nvmrc',
+        '.python-version',
+      ]);
+      const NESTED_SKIP = new Set(['ios', 'android', 'examples', 'example', 'fixtures', 'tests', 'test', '__tests__', 'templates', '_archive', 'archive', 'docs', 'tmp', 'vendor']);
 
       const walkHandle = async (handle: any, currentPath: string): Promise<FileTreeNode> => {
         const isFolder = handle.kind === 'directory';
@@ -189,7 +214,13 @@ export class ProjectScannerService {
               folderNode.children!.push(subTree);
             }
           } else if (entry.kind === 'file') {
-            if (TRACKED_CONFIGS.has(entryRelPath)) {
+            const depth = entryRelPath.split('/').length - 1;
+            const isNestedManifest =
+              depth > 0 &&
+              depth <= 3 &&
+              NESTED_CONFIG_NAMES.has(entry.name) &&
+              !entryRelPath.split('/').some((seg: string) => NESTED_SKIP.has(seg));
+            if (TRACKED_CONFIGS.has(entryRelPath) || isNestedManifest) {
               try {
                 const cfgObj = await entry.getFile();
                 configFiles[entryRelPath] = (await cfgObj.text()).slice(0, 128 * 1024);
@@ -441,6 +472,7 @@ export class ProjectScannerService {
         tree: enrichedTree,
         files: parsedFiles,
         configFiles: p.configFiles || {},
+        installedPackages: p.installedPackages,
       };
     });
     return { rootPath: raw.rootPath, projects };

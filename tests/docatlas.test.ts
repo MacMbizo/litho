@@ -269,3 +269,70 @@ test('Auditor: ADRs, changelogs and evergreen docs are exempt from age staleness
   assert.notStrictEqual(st('docs/glossary.md'), 'stale');
   assert.strictEqual(st('docs/setup.md'), 'stale');
 });
+
+// ---------------------------------------------------------------------------
+// Stack freshness
+// ---------------------------------------------------------------------------
+import { findExpoMisalignments, nodeEolDate, pythonEolDate, currentNodeLts } from '../src/services/stackInspector.ts';
+import { assessStackFreshness } from '../src/services/stackFreshness.ts';
+
+test('StackInspector: discovers nested apps (e.g. mobile/) with installed versions', () => {
+  const workspace = ws([], {
+    'package.json': JSON.stringify({ dependencies: { express: '^4.18.0' } }),
+    'mobile/package.json': JSON.stringify({ dependencies: { expo: '^50.0.0', 'react-native': '^0.73.0', react: '^18.2.0' } }),
+    'mobile/app.json': JSON.stringify({ expo: { name: 'm', slug: 'm' } }),
+  });
+  workspace.installedPackages = { mobile: { present: true, versions: { expo: '50.0.21' } }, '': { present: false, versions: {} } };
+  const stack = inspectProjectStack(workspace);
+  assert.deepStrictEqual(stack.apps!.map((a) => a.path), ['', 'mobile']);
+  assert.ok(stack.frameworks.includes('Expo'));
+  const expo = stack.dependencies.find((d) => d.name === 'expo')!;
+  assert.strictEqual(expo.appPath, 'mobile');
+  assert.strictEqual(expo.installedVersion, '50.0.21');
+  assert.strictEqual(expo.sourceFile, 'mobile/package.json');
+  assert.strictEqual(stack.expoSdkVersion, '50.0.21');
+  assert.strictEqual(stack.apps![0].depsInstalled, false);
+});
+
+test('Runtime EOL: Node and Python schedules', () => {
+  assert.strictEqual(nodeEolDate(18), '2025-04-30');
+  assert.strictEqual(nodeEolDate(20), '2026-04-30');
+  assert.strictEqual(nodeEolDate(22), '2027-04-30');
+  assert.strictEqual(nodeEolDate(23), '2025-06-01');
+  assert.strictEqual(pythonEolDate(9), '2025-10-31');
+  assert.strictEqual(currentNodeLts(NOW), 26);
+});
+
+test('Expo alignment flags packages whose major.minor differ from the SDK bundle', () => {
+  const issues = findExpoMisalignments(
+    'mobile',
+    54,
+    { 'react-native': '0.79.2', 'expo-router': '~6.0.4', react: '19.1.0', lodash: '^4.0.0' },
+    { 'react-native': '0.81.4', 'expo-router': '~6.0.10', react: '19.1.0' }
+  );
+  assert.deepStrictEqual(issues.map((i) => i.packageName), ['react-native']);
+});
+
+test('Freshness: old Expo SDK, EOL Node pin and missing install are reported, worst first', () => {
+  const workspace = ws([], {
+    '.nvmrc': '18\n',
+    'mobile/package.json': JSON.stringify({ dependencies: { expo: '^50.0.0' } }),
+  });
+  workspace.installedPackages = { mobile: { present: false, versions: {} } };
+  const base = inspectProjectStack(workspace);
+  const expo = base.dependencies.find((d) => d.name === 'expo')!;
+  const g = buildUpgradeGuidance('expo', 'npm', 50, '58.0.3', 58, '50.0.0', 'mobile');
+  Object.assign(expo, { latestVersion: '58.0.3', latestMajor: 58, majorBehind: g.majorBehind, severity: g.severity, upgradeCommands: g.upgradeCommands, notes: g.notes });
+  const report = assessStackFreshness({ ...base, checkedLiveAt: new Date(NOW).toISOString() }, NOW);
+  assert.strictEqual(report.level, 'critical');
+  assert.strictEqual(report.issues[0].title, 'Expo SDK 50 → 58 (mobile/)');
+  assert.ok(report.issues[0].commands[0].startsWith('cd mobile && npx expo install expo@^51.0.0'));
+  assert.ok(report.issues.some((i) => i.title.startsWith('Node 18 reached end-of-life')));
+  assert.ok(report.issues.some((i) => i.title.startsWith('Dependencies not installed (mobile/)')));
+});
+
+test('Freshness: a project with no manifests is "none", unchecked deps are "unchecked"', () => {
+  assert.strictEqual(assessStackFreshness(inspectProjectStack(ws([])), NOW).level, 'none');
+  const unchecked = assessStackFreshness(inspectProjectStack(ws([], { 'package.json': JSON.stringify({ dependencies: { vite: '^7.0.0' } }) })), NOW);
+  assert.strictEqual(unchecked.level, 'unchecked');
+});

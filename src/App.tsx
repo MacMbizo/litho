@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { PanelLeftOpen } from 'lucide-react';
 import { MarkdownFile, ViewMode, DocType, ProjectWorkspace, FileTreeNode } from './types/document';
 import { getSampleWorkspace } from './services/sampleVault';
 import { MarkdownService } from './services/markdown';
@@ -28,6 +29,12 @@ import {
 } from './services/docRemediation';
 import { DocumentMetadata } from './types/document';
 import { buildTreeFromFiles } from './services/fileTree';
+import {
+  SNAPSHOT_STALE_MS,
+  fromSnapshot,
+  loadPortfolioSnapshot,
+  savePortfolioSnapshot,
+} from './services/portfolioStore';
 import { AISummaryModal } from './components/ai/AISummaryModal';
 import { AISettingsModal } from './components/ai/AISettingsModal';
 import { ProjectChatDrawer } from './components/ai/ProjectChatDrawer';
@@ -36,6 +43,15 @@ import { ToastProvider, useToast } from './components/ui/Toast';
 const SAVED_WORKSPACE_PATH_KEY = 'notion_active_project_path';
 const SAVED_PORTFOLIO_ROOT_KEY = 'notion_portfolio_root_path';
 const SAVED_SIDEBAR_WIDTH_KEY = 'notion_sidebar_width';
+const SAVED_LAST_VIEW_KEY = 'notion_last_view';
+
+function parentFolderOf(p: string): string | null {
+  const norm = p.replace(/[\\/]+$/, '');
+  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
+  if (idx <= 0) return null;
+  const parent = norm.slice(0, idx);
+  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent;
+}
 
 const AppContent: React.FC = () => {
   const { toast } = useToast();
@@ -59,9 +75,15 @@ const AppContent: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<ViewMode>('editor');
   const [isRawMarkdown, setIsRawMarkdown] = useState<boolean>(false);
-  const [portfolioRootPath, setPortfolioRootPath] = useState<string | null>(null);
+  const [portfolioRoots, setPortfolioRoots] = useState<string[]>([]);
   const [portfolioProjects, setPortfolioProjects] = useState<PortfolioProjectSummary[]>([]);
   const [scanningPortfolio, setScanningPortfolio] = useState<boolean>(false);
+  /** Quiet background refresh of a remembered portfolio (UI stays usable). */
+  const [refreshingPortfolio, setRefreshingPortfolio] = useState<boolean>(false);
+  const [portfolioSavedAt, setPortfolioSavedAt] = useState<string | null>(null);
+  const portfolioRootPath = portfolioRoots[0] ?? null;
+  const portfolioProjectsRef = useRef<PortfolioProjectSummary[]>([]);
+  portfolioProjectsRef.current = portfolioProjects;
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   // Sidebar layout state
@@ -151,32 +173,59 @@ const AppContent: React.FC = () => {
   );
 
   // Portfolio: summaries are audited locally first, then enriched with live registry drift in the background.
-  const portfolioScanToken = useRef(0);
-  const applyPortfolioScan = useCallback((rootPath: string, projects: ProjectWorkspace[]) => {
-    const token = ++portfolioScanToken.current;
-    const summaries: PortfolioProjectSummary[] = projects.map((proj) => ({
-      workspace: proj,
-      auditReport: auditProjectDocumentation(proj, inspectProjectStack(proj)),
-    }));
-    setPortfolioRootPath(rootPath);
-    setPortfolioProjects(summaries);
-    (async () => {
-      for (const summary of summaries) {
-        const base = summary.auditReport.stackProfile;
-        if (base.dependencies.length === 0) continue;
-        try {
-          const live = await checkLiveStackVersions(base);
-          if (portfolioScanToken.current !== token) return;
-          const auditReport = auditProjectDocumentation(summary.workspace, live);
-          setPortfolioProjects((prev) =>
-            prev.map((e) => (e.workspace.rootPath === summary.workspace.rootPath ? { ...e, auditReport } : e))
-          );
-        } catch {
-          // registry unreachable: keep local audit
-        }
+  // Results are remembered on disk (portfolioStore) so the next launch opens instantly.
+  const enrichWithRegistry = useCallback(async (summaries: PortfolioProjectSummary[], force = false) => {
+    for (const summary of summaries) {
+      const base = summary.auditReport.stackProfile;
+      if (base.dependencies.length === 0 && (base.apps || []).length === 0) continue;
+      try {
+        const live = await checkLiveStackVersions(base, force);
+        setPortfolioProjects((prev) =>
+          prev.map((e) =>
+            e.workspace.rootPath === summary.workspace.rootPath
+              ? {
+                  ...e,
+                  // Snapshot entries have no file contents to re-audit; only their stack data changes.
+                  auditReport: e.fromSnapshot
+                    ? { ...e.auditReport, stackProfile: live }
+                    : auditProjectDocumentation(e.workspace, live),
+                }
+              : e
+          )
+        );
+      } catch {
+        // registry unreachable: keep local audit
       }
-    })();
+    }
   }, []);
+
+  const applyPortfolioScan = useCallback(
+    (rootPath: string, projects: ProjectWorkspace[]) => {
+      const scannedAt = new Date().toISOString();
+      const summaries: PortfolioProjectSummary[] = projects.map((proj) => ({
+        workspace: proj,
+        auditReport: auditProjectDocumentation(proj, inspectProjectStack(proj)),
+        scannedAt,
+      }));
+      const norm = (p: string | null) => (p || '').replace(/[\\/]+$/, '').toLowerCase();
+      setPortfolioRoots((prev) => (prev.some((r) => norm(r) === norm(rootPath)) ? prev : [...prev, rootPath]));
+      setPortfolioProjects((prev) =>
+        [...prev.filter((e) => norm(parentFolderOf(e.workspace.rootPath)) !== norm(rootPath)), ...summaries].sort((a, b) =>
+          a.workspace.name.localeCompare(b.workspace.name)
+        )
+      );
+      setPortfolioSavedAt(scannedAt);
+      enrichWithRegistry(summaries);
+    },
+    [enrichWithRegistry]
+  );
+
+  // Persist the portfolio whenever it changes (debounced in the store), but only after the saved one was loaded.
+  const portfolioLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!portfolioLoadedRef.current) return;
+    savePortfolioSnapshot(portfolioRoots, portfolioProjects);
+  }, [portfolioRoots, portfolioProjects]);
 
   // The active project's portfolio entry always reflects live, in-editor state.
   const displayedPortfolio = useMemo(
@@ -194,14 +243,38 @@ const AppContent: React.FC = () => {
     setFiles(refreshed.files);
     setOpenFileIds((prev) => prev.filter((id) => refreshed.files.some((f) => f.id === id)));
     setActiveFileId((prev) => (prev && refreshed.files.some((f) => f.id === prev) ? prev : prev ? null : prev));
-    setPortfolioProjects((prev) =>
-      prev.map((entry) =>
-        entry.workspace.rootPath === refreshed.rootPath
-          ? { workspace: refreshed, auditReport: auditProjectDocumentation(refreshed, inspectProjectStack(refreshed)) }
-          : entry
-      )
-    );
-  }, []);
+    const summary: PortfolioProjectSummary = {
+      workspace: refreshed,
+      auditReport: auditProjectDocumentation(refreshed, inspectProjectStack(refreshed)),
+      scannedAt: new Date().toISOString(),
+    };
+    if (!portfolioProjectsRef.current.some((e) => e.workspace.rootPath === refreshed.rootPath)) return;
+    setPortfolioProjects((prev) => prev.map((entry) => (entry.workspace.rootPath === refreshed.rootPath ? summary : entry)));
+    enrichWithRegistry([summary]);
+  }, [enrichWithRegistry]);
+
+  const refreshAllPortfolioRoots = useCallback(
+    async (roots: string[], quiet: boolean) => {
+      if (roots.length === 0) return;
+      setRefreshingPortfolio(true);
+      let found = 0;
+      try {
+        for (const root of roots) {
+          try {
+            const result = await ProjectScannerService.scanPortfolioRoot(root);
+            applyPortfolioScan(result.rootPath, result.projects);
+            found += result.projects.length;
+          } catch (err: any) {
+            if (!quiet) toast('Scan Failed', `${root}: ${err?.message || 'could not scan'}`, 'error');
+          }
+        }
+        if (!quiet) toast('Portfolio Rescanned', `${found} projects across ${roots.length} folder${roots.length === 1 ? '' : 's'}`, 'success');
+      } finally {
+        setRefreshingPortfolio(false);
+      }
+    },
+    [applyPortfolioScan, toast]
+  );
 
   // Restore previous project path and portfolio root if in Electron on first boot
   useEffect(() => {
@@ -223,16 +296,37 @@ const AppContent: React.FC = () => {
         .catch(() => localStorage.removeItem(SAVED_WORKSPACE_PATH_KEY));
     }
 
-    const savedPortfolioRoot = localStorage.getItem(SAVED_PORTFOLIO_ROOT_KEY);
-    if (savedPortfolioRoot) {
-      setPortfolioRootPath(savedPortfolioRoot);
-      ProjectScannerService.scanPortfolioRoot(savedPortfolioRoot)
-        .then((result) => applyPortfolioScan(result.rootPath, result.projects))
-        .catch(() => {
-          // Silently ignore if folder no longer exists
-        });
-    }
+    // Portfolio: show the remembered scan instantly, then refresh quietly only when it's old.
+    loadPortfolioSnapshot().then((snap) => {
+      if (snap) {
+        const restored = fromSnapshot(snap);
+        setPortfolioRoots(snap.roots);
+        setPortfolioProjects(restored);
+        setPortfolioSavedAt(snap.projects.length > 0 ? snap.savedAt : null);
+        if (restored.length > 0 && (localStorage.getItem(SAVED_LAST_VIEW_KEY) === 'portfolio' || !savedPath)) {
+          setViewMode('portfolio');
+        }
+        const age = Date.now() - Date.parse(snap.savedAt);
+        if (restored.length === 0 || !(age < SNAPSHOT_STALE_MS)) {
+          refreshAllPortfolioRoots(snap.roots, true);
+        } else {
+          // Registry answers are cached for 24h, so this is cheap and keeps freshness current.
+          enrichWithRegistry(restored);
+        }
+      }
+      portfolioLoadedRef.current = true;
+    });
   }, []);
+
+  // Remember whether the user was last on the portfolio so the app reopens there.
+  useEffect(() => {
+    if (!portfolioLoadedRef.current) return;
+    try {
+      localStorage.setItem(SAVED_LAST_VIEW_KEY, viewMode === 'portfolio' ? 'portfolio' : 'project');
+    } catch {
+      // ignore
+    }
+  }, [viewMode]);
 
   // Live disk changes (Electron). One subscription for the app lifetime; reads the current workspace via ref.
   useEffect(() => {
@@ -565,7 +659,6 @@ const AppContent: React.FC = () => {
     try {
       const result = await ProjectScannerService.openAndScanPortfolioRoot();
       if (!result) return;
-      localStorage.setItem(SAVED_PORTFOLIO_ROOT_KEY, result.rootPath);
       applyPortfolioScan(result.rootPath, result.projects);
       setViewMode('portfolio');
       toast('Portfolio Scanned', `Found ${result.projects.length} projects`, 'success');
@@ -580,7 +673,6 @@ const AppContent: React.FC = () => {
     setScanningPortfolio(true);
     try {
       const result = await ProjectScannerService.scanPortfolioRoot(targetPath);
-      localStorage.setItem(SAVED_PORTFOLIO_ROOT_KEY, result.rootPath);
       applyPortfolioScan(result.rootPath, result.projects);
       setViewMode('portfolio');
       toast('Portfolio Scanned', `Found ${result.projects.length} projects`, 'success');
@@ -591,16 +683,65 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleRefreshPortfolio = async () => {
-    if (!portfolioRootPath) return;
-    await handleScanPortfolioPath(portfolioRootPath);
+  const handleRefreshPortfolio = () => refreshAllPortfolioRoots(portfolioRoots, false);
+
+  const handleRemovePortfolioRoot = (root: string) => {
+    const norm = (p: string | null) => (p || '').replace(/[\\/]+$/, '').toLowerCase();
+    setPortfolioRoots((prev) => prev.filter((r) => norm(r) !== norm(root)));
+    setPortfolioProjects((prev) => prev.filter((e) => norm(parentFolderOf(e.workspace.rootPath)) !== norm(root)));
+    toast('Folder Removed', `${root} is no longer part of the portfolio`, 'info');
   };
 
-  const handleOpenPortfolioProject = (projWorkspace: ProjectWorkspace, targetFileId?: string) => {
+  const [rescanningProjectRoot, setRescanningProjectRoot] = useState<string | null>(null);
+  const handleRescanPortfolioProject = async (rootPath: string) => {
+    if (rootPath === workspace.rootPath) {
+      handleRefreshProject();
+      return;
+    }
+    setRescanningProjectRoot(rootPath);
+    try {
+      const fresh = await ProjectScannerService.scanPath(rootPath, { watch: false });
+      if (!fresh) return;
+      const summary: PortfolioProjectSummary = {
+        workspace: fresh,
+        auditReport: auditProjectDocumentation(fresh, inspectProjectStack(fresh)),
+        scannedAt: new Date().toISOString(),
+      };
+      setPortfolioProjects((prev) => prev.map((e) => (e.workspace.rootPath === rootPath ? summary : e)));
+      await enrichWithRegistry([summary], true);
+    } catch (err: any) {
+      toast('Rescan Failed', err?.message || rootPath, 'error');
+    } finally {
+      setRescanningProjectRoot(null);
+    }
+  };
+
+  const handleOpenPortfolioProject = async (projWorkspace: ProjectWorkspace, targetFileId?: string) => {
     // Already the active project: keep in-memory state (open tabs, unsaved edits) and just navigate.
     if (projWorkspace.rootPath === workspace.rootPath) {
       if (targetFileId) handleSelectFile(targetFileId);
       else setViewMode('project-overview');
+      return;
+    }
+
+    // Remembered entries carry no file contents: always load them from disk before showing an editor.
+    const entry = portfolioProjects.find((e) => e.workspace.rootPath === projWorkspace.rootPath);
+    if (entry?.fromSnapshot && projWorkspace.isLocalFolder) {
+      try {
+        const fresh = await ProjectScannerService.scanPath(projWorkspace.rootPath);
+        if (!fresh) throw new Error('Folder could not be read');
+        setWorkspace(fresh);
+        setFiles(fresh.files);
+        const chosen = (targetFileId && fresh.files.some((f) => f.id === targetFileId) ? targetFileId : null) || fresh.files[0]?.id || null;
+        setActiveFileId(chosen);
+        setOpenFileIds(chosen ? [chosen] : []);
+        localStorage.setItem(SAVED_WORKSPACE_PATH_KEY, fresh.rootPath);
+        applyRefreshedWorkspace(fresh);
+        setViewMode(targetFileId && chosen === targetFileId ? 'editor' : 'project-overview');
+        if (!targetFileId) toast('Opened Project', fresh.name, 'success');
+      } catch (err: any) {
+        toast('Could Not Open Project', `${projWorkspace.rootPath}: ${err?.message || 'unreadable'}`, 'error');
+      }
       return;
     }
 
@@ -776,13 +917,6 @@ const AppContent: React.FC = () => {
     [workspace, files]
   );
 
-  const parentFolderOf = (p: string) => {
-    const norm = p.replace(/[\\/]+$/, '');
-    const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
-    if (idx <= 0) return null;
-    const parent = norm.slice(0, idx);
-    return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent;
-  };
   const currentWorkspaceParent = workspace.isLocalFolder ? parentFolderOf(workspace.rootPath) : null;
 
   return (
@@ -823,6 +957,23 @@ const AppContent: React.FC = () => {
 
       {/* Main Workspace Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#161618]">
+        {/* The portfolio has its own header; editor chrome (file breadcrumb, tabs) would only distract there. */}
+        {viewMode === 'portfolio' ? (
+          isSidebarCollapsed && (
+            <header className="h-10 border-b border-[#2f2f2f] bg-[#191919] px-3 flex items-center">
+              <button
+                type="button"
+                onClick={() => setIsSidebarCollapsed(false)}
+                className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-[#2a2a2a] transition"
+                aria-label="Show sidebar"
+                title="Show sidebar"
+              >
+                <PanelLeftOpen className="w-4 h-4" />
+              </button>
+            </header>
+          )
+        ) : (
+        <>
         {/* Top Navbar */}
         <TopNav
           activeFile={activeFile}
@@ -851,20 +1002,27 @@ const AppContent: React.FC = () => {
           onCloseTab={handleCloseTab}
           onNewTab={() => handleNewFile('document')}
         />
+        </>
+        )}
 
         {/* View Switcher Container */}
         <div className="flex-1 overflow-hidden relative">
           {viewMode === 'portfolio' && (
             <PortfolioView
-              portfolioRootPath={portfolioRootPath}
+              roots={portfolioRoots}
+              savedAt={portfolioSavedAt}
               currentWorkspaceParent={currentWorkspaceParent}
               activeProjectRoot={workspace.rootPath}
               projects={displayedPortfolio}
               scanning={scanningPortfolio}
+              refreshing={refreshingPortfolio}
+              rescanningProjectRoot={rescanningProjectRoot}
               isDesktop={ProjectScannerService.isElectron()}
-              onScanPortfolioRoot={handleScanPortfolioRoot}
+              onAddRoot={handleScanPortfolioRoot}
               onScanCurrentWorkspaceParent={() => currentWorkspaceParent && handleScanPortfolioPath(currentWorkspaceParent)}
               onRefreshPortfolio={handleRefreshPortfolio}
+              onRemoveRoot={handleRemovePortfolioRoot}
+              onRescanProject={handleRescanPortfolioProject}
               onOpenProject={handleOpenPortfolioProject}
             />
           )}

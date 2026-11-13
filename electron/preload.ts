@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
-  scanDirectory: (dirPath: string) => ipcRenderer.invoke('fs:scanDirectory', dirPath),
+  scanDirectory: (dirPath: string, opts?: { watch?: boolean }) => ipcRenderer.invoke('fs:scanDirectory', dirPath, opts),
   scanPortfolioRoot: (dirPath: string) => ipcRenderer.invoke('fs:scanPortfolioRoot', dirPath),
   readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deletePath: (targetPath: string) => ipcRenderer.invoke('fs:deletePath', targetPath),
   revealInExplorer: (targetPath: string) => ipcRenderer.invoke('fs:revealInExplorer', targetPath),
   fetchJson: (url: string) => ipcRenderer.invoke('net:fetchJson', url),
+  storeRead: (name: string) => ipcRenderer.invoke('store:read', name),
+  storeWrite: (name: string, data: unknown) => ipcRenderer.invoke('store:write', name, data),
   onFsChanged: (callback: (data: any) => void) => {
     const listener = (_: unknown, data: any) => callback(data);
     ipcRenderer.on('fs:changed', listener);

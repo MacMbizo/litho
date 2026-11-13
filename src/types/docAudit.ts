@@ -126,6 +126,8 @@ export interface FreshnessIssue {
   id: string;
   appPath: string;
   severity: 'critical' | 'outdated' | 'minor';
+  /** platform = decides whether the app runs/builds at all; library = app code; tooling = dev-only. */
+  tier: 'platform' | 'library' | 'tooling';
   title: string;
   detail: string;
   commands: string[];

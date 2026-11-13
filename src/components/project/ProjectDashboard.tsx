@@ -17,7 +17,11 @@ import {
   FolderGit2,
   SlidersHorizontal,
   Search,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
+import { StackFreshnessPanel } from './StackFreshnessPanel';
+import { assessStackFreshness } from '../../services/stackFreshness';
 import { ProjectWorkspace, ViewMode } from '../../types/document';
 import { DocTaxonomyStatus, ProjectDocAuditReport } from '../../types/docAudit';
 import { generateUpgradePlanMarkdown } from '../../services/stackInspector';
@@ -75,6 +79,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 }) => {
   const files = project.files;
   const liveStackProfile = auditReport.stackProfile;
+  const freshnessReport = useMemo(() => assessStackFreshness(liveStackProfile), [liveStackProfile]);
+  const [showAllDeps, setShowAllDeps] = useState(false);
   const [inventoryFilter, setInventoryFilter] = useState<'all' | DocTaxonomyStatus>('all');
   const [matrixQuery, setMatrixQuery] = useState('');
   const [generatingAiPlan, setGeneratingAiPlan] = useState(false);
@@ -386,12 +392,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-neutral-200 uppercase tracking-wider flex items-center gap-2">
               <Cpu className="w-4 h-4 text-indigo-400" />
-              <span>Tech Stack &amp; Live SDK Drift</span>
-              {liveStackProfile.frameworks.length > 0 && (
-                <span className="text-[11px] normal-case font-normal text-neutral-400">
-                  ({liveStackProfile.frameworks.join(' • ')})
-                </span>
-              )}
+              <span className="whitespace-nowrap">Stack Freshness</span>
             </h2>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -433,32 +434,32 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             </div>
           )}
 
-          {liveStackProfile.configFilesFound.length === 0 ? (
-            <div className="p-5 rounded-xl border border-dashed border-[#2d2d2d] text-xs text-neutral-500">
-              No stack config files (`app.config.json`, `app.json`, `package.json`, `pyproject.toml`) detected in this workspace.
-            </div>
-          ) : (
-            <div className="rounded-xl bg-[#202020] border border-[#2d2d2d] overflow-hidden">
-              <div className="px-4 py-2.5 border-b border-[#2a2a2a] flex flex-wrap items-center justify-between gap-2 text-[11px] text-neutral-400">
-                <span>
-                  Config files:{' '}
-                  <span className="font-mono text-neutral-200">
-                    {liveStackProfile.configFilesFound.join(', ')}
-                  </span>
-                </span>
-                {liveStackProfile.checkedLiveAt && (
-                  <span>
-                    Registry checked: {new Date(liveStackProfile.checkedLiveAt).toLocaleTimeString()}
-                  </span>
-                )}
-              </div>
+          <div className="rounded-2xl bg-[#1e1e1e] border border-[#2d2d2d] p-5">
+            <StackFreshnessPanel
+              report={freshnessReport}
+              profile={liveStackProfile}
+              checking={checkingLiveVersions}
+            />
+          </div>
 
-              {liveStackProfile.dependencies.length === 0 ? (
-                <div className="p-4 text-xs text-neutral-400">
-                  Config files detected, but no trackable runtime SDKs were listed.
-                </div>
-              ) : (
-                <div className="divide-y divide-[#2a2a2a]">
+          {liveStackProfile.dependencies.length > 0 && (
+            <div className="rounded-xl bg-[#202020] border border-[#2d2d2d] overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowAllDeps((v) => !v)}
+                aria-expanded={showAllDeps}
+                className="w-full px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-neutral-400 hover:bg-[#242424] transition"
+              >
+                <span className="flex items-center gap-1.5">
+                  {showAllDeps ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  All tracked packages ({liveStackProfile.dependencies.length})
+                </span>
+                <span className="font-mono text-neutral-500 truncate max-w-[60%]">
+                  {liveStackProfile.configFilesFound.filter((f) => /(^|\/)(package\.json|app\.json|app\.config\.\w+|pyproject\.toml|requirements\.txt)$/.test(f)).join(', ')}
+                </span>
+              </button>
+              {showAllDeps && (
+                <div className="divide-y divide-[#2a2a2a] border-t border-[#2a2a2a]">
                   {liveStackProfile.dependencies.map((dep) => (
                     <div
                       key={`${dep.sourceFile}:${dep.name}`}
@@ -467,42 +468,22 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-semibold text-neutral-100">{dep.name}</span>
-                          <span className="text-[10px] font-mono text-neutral-500 bg-[#1a1a1a] px-1.5 py-0.5 rounded">
-                            {dep.sourceFile}
-                          </span>
-                          <span
-                            className={`text-[10px] font-medium px-2 py-0.5 rounded border uppercase ${
-                              SEVERITY_BADGE[dep.severity] || SEVERITY_BADGE.unknown
-                            }`}
-                          >
+                          <span className="text-[10px] font-mono text-neutral-500 bg-[#1a1a1a] px-1.5 py-0.5 rounded">{dep.sourceFile}</span>
+                          <span className={`text-[10px] font-medium px-2 py-0.5 rounded border uppercase ${SEVERITY_BADGE[dep.severity] || SEVERITY_BADGE.unknown}`}>
                             {dep.severity}
                           </span>
                         </div>
-                        {dep.notes && (
-                          <p className="text-[11px] text-neutral-400 mt-1">{dep.notes}</p>
-                        )}
+                        {dep.notes && <p className="text-[11px] text-neutral-400 mt-1">{dep.notes}</p>}
                       </div>
-
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-right font-mono text-xs">
-                          <span className="text-neutral-300">{dep.currentVersion}</span>
-                          {dep.latestVersion && (
-                            <>
-                              <span className="text-neutral-500 mx-1.5">→</span>
-                              <span
-                                className={
-                                  dep.severity === 'current' ? 'text-emerald-400' : 'text-amber-300 font-semibold'
-                                }
-                              >
-                                {dep.latestVersion}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        {dep.upgradeCommands.length > 0 && dep.severity !== 'current' && (
-                          <code className="hidden lg:inline-block text-[10px] bg-[#161616] border border-[#2f2f2f] text-neutral-300 px-2 py-1 rounded">
-                            {dep.upgradeCommands[0]}
-                          </code>
+                      <div className="text-right font-mono text-xs shrink-0">
+                        <span className="text-neutral-300" title={dep.installedVersion ? `declared ${dep.currentVersion}` : undefined}>
+                          {dep.installedVersion || dep.currentVersion}
+                        </span>
+                        {dep.latestVersion && (
+                          <>
+                            <span className="text-neutral-500 mx-1.5">→</span>
+                            <span className={dep.severity === 'current' ? 'text-emerald-400' : 'text-amber-300 font-semibold'}>{dep.latestVersion}</span>
+                          </>
                         )}
                       </div>
                     </div>

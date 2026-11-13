@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -8,53 +9,7 @@ app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAcce
 let mainWindow: BrowserWindow | null = null;
 let activeWatcher: fs.FSWatcher | null = null;
 
-const IGNORED_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'dist-electron',
-  'build',
-  '.next',
-  '.cache',
-  '.vscode',
-  '.idea',
-  'coverage',
-  'target',
-  'bin',
-  'obj',
-  '.turbo',
-  '.gradle',
-]);
-
 const MD_EXTENSIONS = new Set(['.md', '.markdown', '.mdx']);
-
-const STACK_CONFIG_FILES = [
-  'package.json',
-  'app.config.json',
-  'app.json',
-  'app.config.ts',
-  'app.config.js',
-  'eas.json',
-  'tsconfig.json',
-  'pyproject.toml',
-  'requirements.txt',
-  'Dockerfile',
-  'docker-compose.yml',
-  'docker-compose.yaml',
-  'vercel.json',
-  'wrangler.toml',
-  '.firebaserc',
-  'supabase/config.toml',
-  'vite.config.ts',
-  'vite.config.js',
-  'vite.config.mts',
-  'vite.config.mjs',
-  'next.config.js',
-  'next.config.mjs',
-  'next.config.ts',
-  'Procfile',
-  '.nvmrc',
-];
 
 // Files the app itself wrote recently; the watcher ignores their change events so autosave
 // does not trigger a self-inflicted rescan.
@@ -76,15 +31,6 @@ function isRecentSelfWrite(filePath: string): boolean {
   return true;
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.promises.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Runs async work over items with a concurrency limit, preserving order. */
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
@@ -99,20 +45,10 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
-async function readStackConfigFiles(rootDir: string): Promise<Record<string, string>> {
-  const configs: Record<string, string> = {};
-  for (const rel of STACK_CONFIG_FILES) {
-    const full = path.join(rootDir, rel);
-    try {
-      if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-        const content = await fs.promises.readFile(full, 'utf-8');
-        configs[rel] = content.slice(0, 128 * 1024);
-      }
-    } catch {
-      // ignore unreadable config files
-    }
-  }
-  return configs;
+// Small JSON store in the user-data folder (portfolio snapshots and roots).
+function storePath(name: string): string {
+  if (!/^[a-z0-9-]{1,64}$/.test(name)) throw new Error('Invalid store name');
+  return path.join(app.getPath('userData'), 'docatlas', `${name}.json`);
 }
 
 function createWindow() {
@@ -275,15 +211,16 @@ ipcMain.handle('dialog:openDirectory', async () => {
   return result.filePaths[0] || null;
 });
 
-ipcMain.handle('fs:scanDirectory', async (_, dirPath: string) => {
+ipcMain.handle('fs:scanDirectory', async (_, dirPath: string, opts?: { watch?: boolean }) => {
   try {
     const rootName = path.basename(dirPath);
-    const [{ files, tree }, configFiles] = await Promise.all([
+    const [{ files, tree }, { configFiles, installedPackages }] = await Promise.all([
       scanDirectoryRecursive(dirPath, dirPath),
       readStackConfigFiles(dirPath),
     ]);
 
-    // Setup live file watcher for external changes (with debounce)
+    // Setup live file watcher for external changes (with debounce). Background rescans skip this.
+    if (opts?.watch === false) return { rootPath: dirPath, rootName, files, tree, configFiles, installedPackages };
     if (activeWatcher) {
       activeWatcher.close();
     }
@@ -306,7 +243,7 @@ ipcMain.handle('fs:scanDirectory', async (_, dirPath: string) => {
       console.warn('File watcher setup skipped or unsupported:', watchErr);
     }
 
-    return { rootPath: dirPath, rootName, files, tree, configFiles };
+    return { rootPath: dirPath, rootName, files, tree, configFiles, installedPackages };
   } catch (err: any) {
     throw new Error(`Failed to scan directory: ${err.message}`);
   }
@@ -321,6 +258,7 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
       files: any[];
       tree: any;
       configFiles: Record<string, string>;
+      installedPackages: Record<string, { present: boolean; versions: Record<string, string> }>;
     }> = [];
 
     const candidateDirs = entries.filter(
@@ -329,13 +267,13 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
 
     const scanned = await mapWithConcurrency(candidateDirs, 4, async (entry) => {
       const projDir = path.join(rootDir, entry.name);
-      const [{ files, tree }, configFiles, hasGit] = await Promise.all([
+      const [{ files, tree }, { configFiles, installedPackages }, hasGit] = await Promise.all([
         scanDirectoryRecursive(projDir, projDir),
         readStackConfigFiles(projDir),
         pathExists(path.join(projDir, '.git')),
       ]);
       if (files.length === 0 && Object.keys(configFiles).length === 0 && !hasGit) return null;
-      return { rootPath: projDir, rootName: entry.name, files, tree, configFiles };
+      return { rootPath: projDir, rootName: entry.name, files, tree, configFiles, installedPackages };
     });
 
     for (const p of scanned) if (p) projects.push(p);
@@ -349,7 +287,11 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
 
 ipcMain.handle('net:fetchJson', async (_, url: string) => {
   try {
-    if (!url.startsWith('https://registry.npmjs.org/') && !url.startsWith('https://pypi.org/pypi/')) {
+    const allowed =
+      url.startsWith('https://registry.npmjs.org/') ||
+      url.startsWith('https://pypi.org/pypi/') ||
+      /^https:\/\/cdn\.jsdelivr\.net\/npm\/expo@\d+\/bundledNativeModules\.json$/.test(url);
+    if (!allowed) {
       throw new Error('Blocked URL');
     }
     const res = await fetch(url, { headers: { Accept: 'application/json' } });
@@ -358,6 +300,23 @@ ipcMain.handle('net:fetchJson', async (_, url: string) => {
   } catch {
     return null;
   }
+});
+
+ipcMain.handle('store:read', async (_, name: string) => {
+  try {
+    return JSON.parse(await fs.promises.readFile(storePath(name), 'utf-8'));
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('store:write', async (_, name: string, data: unknown) => {
+  const target = storePath(name);
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(data), 'utf-8');
+  await fs.promises.rename(tmp, target);
+  return true;
 });
 
 ipcMain.handle('fs:readFile', async (_, filePath: string) => {
