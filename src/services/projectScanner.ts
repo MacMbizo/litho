@@ -1,5 +1,6 @@
 import { MarkdownFile, FileTreeNode, ProjectWorkspace } from '../types/document';
 import { MarkdownService } from './markdown';
+import { archivePathFor, rewriteRelativeLinksForMove } from './docRemediation';
 
 declare global {
   interface Window {
@@ -26,10 +27,11 @@ declare global {
       writeFile: (filePath: string, content: string) => Promise<boolean>;
       createFolder: (folderPath: string) => Promise<boolean>;
       renamePath: (oldPath: string, newPath: string) => Promise<boolean>;
+      movePathSafe?: (oldPath: string, newPath: string) => Promise<string>;
       deletePath: (targetPath: string) => Promise<boolean>;
       revealInExplorer: (targetPath: string) => Promise<boolean>;
       fetchJson: (url: string) => Promise<any>;
-      onFsChanged: (callback: (data: any) => void) => void;
+      onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }
 }
@@ -355,17 +357,43 @@ export class ProjectScannerService {
   }
 
   /**
-   * Archive a markdown file safely into _archive/<relativePath>
+   * Move a markdown file to another project-relative path, rewriting its relative links so they
+   * still resolve from the new location. Never overwrites an existing file. Returns the final
+   * relative path and the rewritten content.
    */
-  static async archiveFile(workspace: ProjectWorkspace, file: MarkdownFile): Promise<string | null> {
-    const cleanRel = file.path.replace(/^_archive\//i, '');
-    const archiveRel = `_archive/${cleanRel}`;
+  static async moveFile(
+    workspace: ProjectWorkspace,
+    file: MarkdownFile,
+    targetRelPath: string
+  ): Promise<{ path: string; content: string }> {
+    const body = rewriteRelativeLinksForMove(file.body, file.path, targetRelPath);
+    const content = MarkdownService.hasFrontmatter(file.content)
+      ? MarkdownService.stringify(file.frontmatter, body)
+      : body;
+
     if (this.isElectron() && file.fullPath) {
-      const targetFullPath = `${workspace.rootPath}/${archiveRel}`.replace(/\\/g, '/');
-      await window.electronAPI!.renamePath(file.fullPath, targetFullPath);
-      return archiveRel;
+      const root = workspace.rootPath.replace(/\\/g, '/').replace(/\/+$/, '');
+      const targetFullPath = `${root}/${targetRelPath}`;
+      if (content !== file.content) {
+        await window.electronAPI!.writeFile(file.fullPath, content);
+      }
+      let finalFullPath = targetFullPath;
+      if (window.electronAPI!.movePathSafe) {
+        finalFullPath = (await window.electronAPI!.movePathSafe(file.fullPath, targetFullPath)).replace(/\\/g, '/');
+      } else {
+        await window.electronAPI!.renamePath(file.fullPath, targetFullPath);
+      }
+      const finalRel = finalFullPath.toLowerCase().startsWith(`${root.toLowerCase()}/`)
+        ? finalFullPath.slice(root.length + 1)
+        : targetRelPath;
+      return { path: finalRel, content };
     }
-    return archiveRel;
+    return { path: targetRelPath, content };
+  }
+
+  /** Archive a markdown file safely into _archive/<relativePath> (reversible). */
+  static async archiveFile(workspace: ProjectWorkspace, file: MarkdownFile): Promise<{ path: string; content: string }> {
+    return this.moveFile(workspace, file, archivePathFor(file.path));
   }
 
   /**

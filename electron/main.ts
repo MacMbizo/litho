@@ -45,7 +45,59 @@ const STACK_CONFIG_FILES = [
   'wrangler.toml',
   '.firebaserc',
   'supabase/config.toml',
+  'vite.config.ts',
+  'vite.config.js',
+  'vite.config.mts',
+  'vite.config.mjs',
+  'next.config.js',
+  'next.config.mjs',
+  'next.config.ts',
+  'Procfile',
+  '.nvmrc',
 ];
+
+// Files the app itself wrote recently; the watcher ignores their change events so autosave
+// does not trigger a self-inflicted rescan.
+const recentWrites = new Map<string, number>();
+const SELF_WRITE_WINDOW_MS = 2000;
+
+function markSelfWrite(filePath: string) {
+  recentWrites.set(path.resolve(filePath).toLowerCase(), Date.now());
+}
+
+function isRecentSelfWrite(filePath: string): boolean {
+  const key = path.resolve(filePath).toLowerCase();
+  const ts = recentWrites.get(key);
+  if (!ts) return false;
+  if (Date.now() - ts > SELF_WRITE_WINDOW_MS) {
+    recentWrites.delete(key);
+    return false;
+  }
+  return true;
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Runs async work over items with a concurrency limit, preserving order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 async function readStackConfigFiles(rootDir: string): Promise<Record<string, string>> {
   const configs: Record<string, string> = {};
@@ -241,7 +293,7 @@ ipcMain.handle('fs:scanDirectory', async (_, dirPath: string) => {
       activeWatcher = fs.watch(dirPath, { recursive: true }, (_, filename) => {
         if (!filename) return;
         const ext = path.extname(filename).toLowerCase();
-        if (MD_EXTENSIONS.has(ext)) {
+        if (MD_EXTENSIONS.has(ext) && !isRecentSelfWrite(path.join(dirPath, filename))) {
           clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
             if (mainWindow) {
@@ -271,34 +323,22 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
       configFiles: Record<string, string>;
     }> = [];
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+    const candidateDirs = entries.filter(
+      (entry) => entry.isDirectory() && !IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')
+    );
 
+    const scanned = await mapWithConcurrency(candidateDirs, 4, async (entry) => {
       const projDir = path.join(rootDir, entry.name);
-      const [{ files, tree }, configFiles] = await Promise.all([
+      const [{ files, tree }, configFiles, hasGit] = await Promise.all([
         scanDirectoryRecursive(projDir, projDir),
         readStackConfigFiles(projDir),
+        pathExists(path.join(projDir, '.git')),
       ]);
+      if (files.length === 0 && Object.keys(configFiles).length === 0 && !hasGit) return null;
+      return { rootPath: projDir, rootName: entry.name, files, tree, configFiles };
+    });
 
-      let hasGit = false;
-      try {
-        await fs.promises.access(path.join(projDir, '.git'));
-        hasGit = true;
-      } catch {
-        hasGit = false;
-      }
-
-      if (files.length > 0 || Object.keys(configFiles).length > 0 || hasGit) {
-        projects.push({
-          rootPath: projDir,
-          rootName: entry.name,
-          files,
-          tree,
-          configFiles,
-        });
-      }
-    }
+    for (const p of scanned) if (p) projects.push(p);
 
     projects.sort((a, b) => a.rootName.localeCompare(b.rootName));
     return { rootPath: rootDir, projects };
@@ -331,6 +371,7 @@ ipcMain.handle('fs:readFile', async (_, filePath: string) => {
 ipcMain.handle('fs:writeFile', async (_, filePath: string, content: string) => {
   try {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    markSelfWrite(filePath);
     await fs.promises.writeFile(filePath, content, 'utf-8');
     return true;
   } catch (err: any) {
@@ -354,6 +395,26 @@ ipcMain.handle('fs:renamePath', async (_, oldPath: string, newPath: string) => {
     return true;
   } catch (err: any) {
     throw new Error(`Failed to rename: ${err.message}`);
+  }
+});
+
+// Moves a file without ever overwriting: if the target exists, appends " (2)", " (3)"... Returns the final path.
+ipcMain.handle('fs:movePathSafe', async (_, oldPath: string, newPath: string) => {
+  try {
+    const dir = path.dirname(newPath);
+    const ext = path.extname(newPath);
+    const base = path.basename(newPath, ext);
+    let finalPath = newPath;
+    for (let i = 2; (await pathExists(finalPath)) && path.resolve(finalPath) !== path.resolve(oldPath); i++) {
+      finalPath = path.join(dir, `${base} (${i})${ext}`);
+    }
+    await fs.promises.mkdir(dir, { recursive: true });
+    markSelfWrite(oldPath);
+    markSelfWrite(finalPath);
+    await fs.promises.rename(oldPath, finalPath);
+    return finalPath;
+  } catch (err: any) {
+    throw new Error(`Failed to move: ${err.message}`);
   }
 });
 

@@ -52,7 +52,8 @@ function tokenizeNormalizedBody(body: string): Set<string> {
   return shingles;
 }
 
-function computeBodySimilarity(bodyA: string, bodyB: string): number {
+/** Jaccard similarity (0..1) of 3-word shingles, ignoring code blocks and markdown punctuation. */
+export function computeBodySimilarity(bodyA: string, bodyB: string): number {
   const setA = tokenizeNormalizedBody(bodyA);
   const setB = tokenizeNormalizedBody(bodyB);
   if (setA.size === 0 || setB.size === 0) return 0;
@@ -73,27 +74,45 @@ function isExplicitCopyName(fileName: string): boolean {
   return /[-_.](copy|backup|bak|dup|duplicate|old|v\d+)\./i.test(fileName);
 }
 
-function extractRelativeMarkdownLinks(body: string): string[] {
+/** Matches `name-copy.md`, `name_backup.md`, `name (1).md`, `name copy.md` and returns the original file name. */
+function originalNameForCopy(fileName: string): string | null {
+  const m = fileName.match(/^(.+?)(?:[-_. ](?:copy|backup|bak|dup|duplicate|old)(?:[-_ ]?\d+)?| \(\d+\))(\.(?:md|mdx|markdown))$/i);
+  return m ? `${m[1]}${m[2]}` : null;
+}
+
+/** Removes fenced and inline code so example links inside code are not treated as real links. */
+export function stripCode(body: string): string {
+  return body
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    .replace(/`[^`\r\n]*`/g, ' ');
+}
+
+function safeDecode(target: string): string {
+  try {
+    return decodeURIComponent(target);
+  } catch {
+    return target;
+  }
+}
+
+/** Local markdown links, including angle-bracket targets with spaces; decoded; code is ignored. */
+export function extractRelativeMarkdownLinks(body: string): string[] {
   const links: string[] = [];
-  const regex = /\[[^\]]+\]\(([^)#\s]+)(?:#[^)]*)?\)/g;
+  const regex = /\[[^\]]*\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"[^"]*")?\)/g;
+  const text = stripCode(body);
   let match: RegExpExecArray | null;
-  while ((match = regex.exec(body)) !== null) {
-    const target = match[1].trim();
-    if (
-      target &&
-      !target.startsWith('http://') &&
-      !target.startsWith('https://') &&
-      !target.startsWith('mailto:') &&
-      !target.startsWith('data:') &&
-      /\.(md|markdown|mdx)$/i.test(target)
-    ) {
-      links.push(target);
+  while ((match = regex.exec(text)) !== null) {
+    const raw = (match[1] || match[2] || '').trim().replace(/#.*$/, '');
+    if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('//')) continue;
+    if (/\.(md|markdown|mdx)$/i.test(raw)) {
+      links.push(safeDecode(raw));
     }
   }
   return links;
 }
 
-function resolveRelativeDocPath(fromFilePath: string, linkTarget: string): string {
+export function resolveRelativeDocPath(fromFilePath: string, linkTarget: string): string {
   if (linkTarget.startsWith('/')) {
     return linkTarget.replace(/^\/+/, '');
   }
@@ -107,6 +126,46 @@ function resolveRelativeDocPath(fromFilePath: string, linkTarget: string): strin
     }
   }
   return parts.join('/');
+}
+
+/** Well-known local dev-server ports. Database / service ports (5432, 6379, 54321...) are never treated as drift. */
+export const DEV_SERVER_PORTS = [3000, 3001, 4000, 4200, 5000, 5173, 5174, 8000, 8080, 8081, 8501, 19000, 19006];
+
+/** Returns the dev-server ports a document mentions that disagree with the configured one. */
+export function findPortDrift(body: string, configuredPort?: number): number[] {
+  if (!configuredPort) return [];
+  const drifted = new Set<number>();
+  const re = /(?:localhost|127\.0\.0\.1):(\d{2,5})\b/g;
+  let m: RegExpExecArray | null;
+  const text = body;
+  while ((m = re.exec(text)) !== null) {
+    const port = Number(m[1]);
+    if (port !== configuredPort && DEV_SERVER_PORTS.includes(port)) drifted.add(port);
+  }
+  return Array.from(drifted);
+}
+
+/** Returns the Expo SDK major a document references when it disagrees with the project, else null. */
+export function findExpoSdkDrift(body: string, expoSdkVersion?: string): number | null {
+  if (!expoSdkVersion) return null;
+  const current = parseInt(expoSdkVersion, 10);
+  if (!current) return null;
+  const re = /Expo\s+SDK\s*(\d{2})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    if (Number(m[1]) !== current) return Number(m[1]);
+  }
+  return null;
+}
+
+function isDeprecatedDoc(file: MarkdownFile): boolean {
+  if (file.frontmatter.status === 'Archived' || file.frontmatter.deprecated === true) return true;
+  const segments = file.path.toLowerCase().split('/');
+  const dirs = segments.slice(0, -1);
+  if (dirs.some((d) => /^_?(deprecated|legacy|obsolete|archived?|old)$/.test(d))) return true;
+  if (/(^|[-_. ])(deprecated|legacy|obsolete)([-_. ]|$)/.test(segments[segments.length - 1])) return true;
+  const head = file.body.slice(0, 400);
+  return /^\s*(?:>\s*)?(?:\[![a-z]+\]\s*)?(?:\*\*|__)?\s*(deprecated|obsolete)\b/im.test(head);
 }
 
 function detectCategory(file: MarkdownFile): DocCategory {
@@ -154,12 +213,24 @@ function buildMissingDocRecommendations(
 ): MissingDocRecommendation[] {
   const recs: MissingDocRecommendation[] = [];
   const stackSummary = stack.frameworks.length > 0 ? stack.frameworks.join(', ') : 'TypeScript / Node.js';
-  const devCmd = stack.scripts.dev
-    ? 'npm run dev'
-    : stack.scripts.start
-    ? 'npm start'
-    : 'npm run dev';
-  const testCmd = stack.scripts.test ? 'npm test' : 'npm test';
+  const pm = (stack.packageManager || '').split('@')[0] || 'npm';
+  const run = (script: string) => (pm === 'npm' ? (script === 'start' || script === 'test' ? `npm ${script}` : `npm run ${script}`) : `${pm} ${script}`);
+  const isPythonOnly = stack.frameworks.includes('Python') && !stack.configFilesFound.includes('package.json');
+  const installCmd = isPythonOnly
+    ? stack.configFilesFound.includes('requirements.txt')
+      ? 'pip install -r requirements.txt'
+      : 'pip install -e .'
+    : `${pm} install`;
+  const devCmd = isPythonOnly
+    ? stack.frameworks.includes('Fastapi')
+      ? `uvicorn main:app --reload${stack.localPort ? ` --port ${stack.localPort}` : ''}`
+      : 'python main.py'
+    : stack.scripts.dev
+      ? run('dev')
+      : stack.scripts.start
+        ? run('start')
+        : run('dev');
+  const testCmd = isPythonOnly ? 'pytest' : stack.scripts.test ? run('test') : `${run('test')}  # add a test script`;
 
   if (!existingTopicIds.has('readme')) {
     recs.push({
@@ -168,7 +239,7 @@ function buildMissingDocRecommendations(
       title: 'Project README & Quick Start',
       priority: 'critical',
       reason: 'Every repository needs a canonical README explaining purpose, setup, and commands.',
-      templateContent: `---\ntitle: "${project.name}"\ntype: "project"\nstatus: "Active"\ntags: ["readme", "overview"]\n---\n\n# ${project.name}\n\n> Stack: ${stackSummary}\n\n## Quick Start\n\n\`\`\`bash\nnpm install\n${devCmd}\n\`\`\`\n\n## Environment Variables\n\nCopy \`.env.example\` to \`.env\` and configure required credentials.\n\n## Testing\n\n\`\`\`bash\n${testCmd}\n\`\`\`\n`,
+      templateContent: `---\ntitle: "${project.name}"\ntype: "project"\nstatus: "Active"\ntags: ["readme", "overview"]\n---\n\n# ${project.name}\n\n> Stack: ${stackSummary}\n\n## Quick Start\n\n\`\`\`bash\n${installCmd}\n${devCmd}\n\`\`\`\n\n## Environment Variables\n\nCopy \`.env.example\` to \`.env\` and configure required credentials.\n\n## Testing\n\n\`\`\`bash\n${testCmd}\n\`\`\`\n`,
     });
   }
 
@@ -196,7 +267,7 @@ function buildMissingDocRecommendations(
           ? 'recommended'
           : 'optional',
       reason: 'Prevents release mistakes by recording build commands, env requirements, and rollback steps.',
-      templateContent: `---\ntitle: "${project.name} Deployment Runbook"\ntype: "document"\nstatus: "Active"\ntags: ["deployment", "runbook"]\n---\n\n# Deployment Runbook — ${project.name}\n\n## Pre-Flight Checklist\n- [ ] Verify all tests pass (\`${testCmd}\`)\n- [ ] Confirm production environment variables are set\n${stack.frameworks.includes('Expo') ? '- [ ] Run `npx expo-doctor` and verify EAS build profile\n' : ''}\n## Build & Deploy\n\`\`\`bash\nnpm run build\n\`\`\`\n`,
+      templateContent: `---\ntitle: "${project.name} Deployment Runbook"\ntype: "document"\nstatus: "Active"\ntags: ["deployment", "runbook"]\n---\n\n# Deployment Runbook — ${project.name}\n\n## Pre-Flight Checklist\n- [ ] Verify all tests pass (\`${testCmd}\`)\n- [ ] Confirm production environment variables are set\n${stack.frameworks.includes('Expo') ? '- [ ] Run `npx expo-doctor` and verify EAS build profile\n' : ''}\n## Build & Deploy\n\`\`\`bash\n${isPythonOnly ? 'docker build -t ' + project.name.toLowerCase() + ' .' : stack.scripts.build ? run('build') : run('build') + '  # add a build script'}\n\`\`\`\n`,
     });
   }
 
@@ -339,9 +410,24 @@ export function auditProjectDocumentation(
     }
   }
 
+  // Explicit copies of any document (`setup-copy.md`, `notes (1).md`, `plan_backup.md`)
+  for (const f of files) {
+    if (duplicateTargetByFileId.has(f.id) || canonicalFileIds.has(f.id)) continue;
+    if (f.frontmatter.scope === 'module' || f.frontmatter.audit_exempt === true) continue;
+    const originalName = originalNameForCopy(f.name);
+    if (!originalName) continue;
+    const dir = getParentDir(f.path);
+    const candidates = files.filter((o) => o.id !== f.id && o.name.toLowerCase() === originalName.toLowerCase());
+    const original = candidates.find((o) => getParentDir(o.path) === dir) || candidates[0];
+    if (!original) continue;
+    duplicateTargetByFileId.set(f.id, original.path);
+    duplicateSimilarityByFileId.set(f.id, Math.round(computeBodySimilarity(original.body, f.body) * 100));
+  }
+
   const counts: Record<DocTaxonomyStatus, number> = {
     canonical: 0,
     healthy: 0,
+    'module-doc': 0,
     stale: 0,
     duplicate: 0,
     deprecated: 0,
@@ -367,25 +453,20 @@ export function auditProjectDocumentation(
       issues.push(`${brokenLinks.length} broken local link${brokenLinks.length > 1 ? 's' : ''} (${brokenLinks[0]})`);
     }
 
-    // 2. Check port drift against stackProfile.localPort
-    if (stackProfile.localPort) {
-      const portMatches = file.body.match(/localhost:(\d{4,5})/g) || [];
-      for (const pm of portMatches) {
-        const mentioned = Number(pm.split(':')[1]);
-        if (mentioned && mentioned !== stackProfile.localPort && [3000, 5173, 8081, 4000, 8000].includes(mentioned)) {
-          issues.push(`Port drift: doc mentions localhost:${mentioned}, config uses :${stackProfile.localPort}`);
-          break;
-        }
-      }
+    // 2. Dev-server port drift against the configured port (database/service ports are ignored)
+    const driftedPorts = findPortDrift(file.body, stackProfile.localPort);
+    if (driftedPorts.length > 0) {
+      issues.push(
+        `Port drift: doc mentions localhost:${driftedPorts.join(', localhost:')}, config uses :${stackProfile.localPort}`
+      );
     }
 
-    // 3. Check Expo SDK drift in docs
-    if (stackProfile.expoSdkVersion) {
-      const docExpoMatch = file.body.match(/Expo\s+SDK\s+(\d{2})/i);
-      const currentExpoMajor = parseInt(stackProfile.expoSdkVersion, 10);
-      if (docExpoMatch && currentExpoMajor && Number(docExpoMatch[1]) !== currentExpoMajor) {
-        issues.push(`SDK drift: doc references Expo SDK ${docExpoMatch[1]}, project uses SDK ${currentExpoMajor}`);
-      }
+    // 3. Expo SDK drift
+    const docSdk = findExpoSdkDrift(file.body, stackProfile.expoSdkVersion);
+    if (docSdk !== null) {
+      issues.push(
+        `SDK drift: doc references Expo SDK ${docSdk}, project uses SDK ${parseInt(stackProfile.expoSdkVersion || '', 10)}`
+      );
     }
 
     // 4. Empty / stub check
@@ -399,23 +480,19 @@ export function auditProjectDocumentation(
       issues.push(`Not updated in ${Math.round(ageDays)} days`);
     }
 
-    // Classify status
+    // Classify status (mutually exclusive, highest precedence first)
     let status: DocTaxonomyStatus = 'healthy';
     const duplicateOf = duplicateTargetByFileId.get(file.id);
-
-    const isDeprecated =
-      file.frontmatter.status === 'Archived' ||
-      /\b(deprecated|legacy|old|obsolete|archive)\b/i.test(lowerPath) ||
-      /^\s*>?\s*\[?!?(DEPRECATED|OBSOLETE)/im.test(file.body.slice(0, 300));
+    const hasDriftOrBrokenLinks = issues.some((i) => i.includes('drift') || i.includes('broken'));
 
     const isScratchpadOrOrphanName =
-      /\b(notes?|todo2?|scratch(pad)?|temp|wip|dump|untitled)\b/i.test(lowerName) &&
+      /(^|[-_. ])(notes?|todo\d*|scratch(pad)?|temp|tmp|wip|dump|untitled|draft)([-_. \d]|$)/i.test(lowerName) &&
       (inboundCount.get(lowerPath) || 0) === 0;
 
     const isScopedModuleDoc = scopedModuleFileIds.has(file.id);
     const similarityScore = duplicateSimilarityByFileId.get(file.id);
 
-    if (isDeprecated) {
+    if (isDeprecatedDoc(file)) {
       status = 'deprecated';
     } else if (duplicateOf) {
       status = 'duplicate';
@@ -424,12 +501,12 @@ export function auditProjectDocumentation(
     } else if (category === 'Agent / Skill') {
       status = 'agent-system';
     } else if (canonicalFileIds.has(file.id)) {
-      status = issues.some((i) => i.includes('drift') || i.includes('broken')) ? 'stale' : 'canonical';
+      status = hasDriftOrBrokenLinks ? 'stale' : 'canonical';
+    } else if (isScopedModuleDoc) {
+      status = hasDriftOrBrokenLinks ? 'stale' : 'module-doc';
     } else if (isScratchpadOrOrphanName) {
       status = 'orphan';
-      if (!issues.some((i) => i.includes('unlinked'))) {
-        issues.push('Unlinked scratchpad/notes file in workspace');
-      }
+      issues.push('Unlinked scratchpad/notes file (no inbound links)');
     } else if (issues.length > 0) {
       status = 'stale';
     }

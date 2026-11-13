@@ -37,6 +37,11 @@ export function parseSemverMajor(versionStr?: string): number | null {
   return parseInt(match[1], 10);
 }
 
+function minorOf(versionStr?: string): number {
+  const m = (versionStr || '').trim().replace(/^[~^>=<v\s]+/, '').match(/^\d+\.(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 export function cleanVersionString(versionStr?: string): string {
   if (!versionStr) return '';
   return versionStr.trim().replace(/^[~^>=<\s]+/, '');
@@ -107,11 +112,13 @@ export async function fetchLatestPackageVersion(
   return latestVersion;
 }
 
-function buildUpgradeGuidance(
+export function buildUpgradeGuidance(
   name: string,
+  ecosystem: 'npm' | 'pypi' | 'runtime',
   currentMajor: number | null,
   latestVersion: string | undefined,
-  latestMajor: number | null
+  latestMajor: number | null,
+  currentVersion?: string
 ): { severity: StackSeverity; majorBehind: number; upgradeCommands: string[]; notes: string } {
   if (currentMajor === null || latestMajor === null || !latestVersion) {
     return {
@@ -126,10 +133,10 @@ function buildUpgradeGuidance(
   let severity: StackSeverity = 'current';
   if (majorBehind >= 3 || (name === 'expo' && majorBehind >= 2) || (name === 'next' && majorBehind >= 2)) {
     severity = 'critical';
-  } else if (majorBehind >= 1) {
+  } else if (majorBehind >= 1 || (currentMajor === 0 && latestMajor === 0 && minorOf(currentVersion) < minorOf(latestVersion) - 5)) {
     severity = 'outdated';
-  } else if (cleanVersionString(latestVersion) !== String(currentMajor)) {
-    severity = 'current';
+  } else if (currentVersion && minorOf(currentVersion) < minorOf(latestVersion)) {
+    severity = 'minor';
   }
 
   const upgradeCommands: string[] = [];
@@ -160,9 +167,18 @@ function buildUpgradeGuidance(
       upgradeCommands.push(`npm install -D electron@^${latestMajor}.0.0`);
       notes = `Electron ${currentMajor} is ${majorBehind} major versions behind ${latestVersion} (Chromium security & Node runtime updates).`;
     }
+  } else if (ecosystem === 'pypi') {
+    if (severity !== 'current') {
+      upgradeCommands.push(`pip install -U "${name}>=${latestVersion}"`);
+      upgradeCommands.push(`uv add "${name}>=${latestVersion}"`);
+      notes = `${name} ${currentVersion || currentMajor} is behind latest ${latestVersion} on PyPI.`;
+    }
   } else if (majorBehind > 0) {
     upgradeCommands.push(`npm install ${name}@^${latestMajor}.0.0`);
     notes = `${name} v${currentMajor} is ${majorBehind} major version${majorBehind > 1 ? 's' : ''} behind ${latestVersion}.`;
+  } else if (severity === 'minor') {
+    upgradeCommands.push(`npm install ${name}@^${latestVersion}`);
+    notes = `${name} ${cleanVersionString(currentVersion)} has newer minor/patch releases (latest ${latestVersion}).`;
   }
 
   return { severity, majorBehind, upgradeCommands, notes };
@@ -244,9 +260,17 @@ export function inspectProjectStack(project: ProjectWorkspace): DetectedStackPro
       const pkg = JSON.parse(configs['package.json']);
       if (pkg.scripts && typeof pkg.scripts === 'object') {
         scripts = pkg.scripts;
+        // Prefer the dev/start script, then any script, then framework config, then framework defaults
+        const devScripts = [scripts.dev, scripts.start, scripts.serve].filter(Boolean).join(' ');
         const allScripts = Object.values(scripts).join(' ');
-        const portMatch = allScripts.match(/(?:--port|-p|PORT=)\s*(\d{4,5})/);
+        const portRe = /(?:--port[= ]|\s-p\s|PORT=)\s*(\d{4,5})/;
+        const portMatch = devScripts.match(portRe) || allScripts.match(portRe);
+        const viteCfg = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs']
+          .map((n) => configs[n])
+          .find(Boolean);
+        const viteCfgPort = viteCfg?.match(/server\s*:\s*\{[^}]*?\bport\s*:\s*(\d{4,5})/s);
         if (portMatch) localPort = Number(portMatch[1]);
+        else if (viteCfgPort) localPort = Number(viteCfgPort[1]);
         else if (allScripts.includes('vite')) localPort = 5173;
         else if (allScripts.includes('next')) localPort = 3000;
         else if (allScripts.includes('expo')) localPort = 8081;
@@ -302,7 +326,13 @@ export function inspectProjectStack(project: ProjectWorkspace): DetectedStackPro
     frameworks.add('Python');
     const pyText = `${configs['pyproject.toml'] || ''}\n${configs['requirements.txt'] || ''}`;
     for (const pyPkg of TRACKED_PYPI_PACKAGES) {
-      const m = pyText.match(new RegExp(`\\b${pyPkg}\\s*[=<>~!]+\\s*([0-9][0-9a-zA-Z.]*)`, 'i'));
+      // Handles requirements (`fastapi==0.110`), PEP 621 (`"fastapi>=0.110"`) and Poetry (`fastapi = "^0.110.0"`)
+      const m = pyText.match(
+        new RegExp(
+          `(?<![\\w-])${pyPkg}(?![\\w-])\\s*(?:\\[[^\\]]*\\])?\\s*(?:=\\s*)?["']?\\s*(?:[\\^~>=<!]=?\\s*)*([0-9][0-9a-zA-Z.]*)`,
+          'i'
+        )
+      );
       if (m && !seenDeps.has(pyPkg)) {
         seenDeps.add(pyPkg);
         frameworks.add(pyPkg.charAt(0).toUpperCase() + pyPkg.slice(1));
@@ -318,6 +348,14 @@ export function inspectProjectStack(project: ProjectWorkspace): DetectedStackPro
         });
       }
     }
+  }
+
+  if (!localPort && (frameworks.has('Fastapi') || frameworks.has('Django') || frameworks.has('Streamlit'))) {
+    const runtimeText = ['pyproject.toml', 'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'Procfile']
+      .map((n) => configs[n] || '')
+      .join('\n');
+    const pyPort = runtimeText.match(/(?:--port[= ]|--server\.port[= ])\s*(\d{4,5})/);
+    localPort = pyPort ? Number(pyPort[1]) : frameworks.has('Streamlit') ? 8501 : 8000;
   }
 
   if (configs['eas.json']) frameworks.add('EAS Build');
@@ -347,7 +385,7 @@ export async function checkLiveStackVersions(
       if (!latestVersion) return dep;
 
       const latestMajor = parseSemverMajor(latestVersion);
-      const guidance = buildUpgradeGuidance(dep.name, dep.currentMajor, latestVersion, latestMajor);
+      const guidance = buildUpgradeGuidance(dep.name, dep.ecosystem, dep.currentMajor, latestVersion, latestMajor, dep.currentVersion);
       return {
         ...dep,
         latestVersion,

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "paperrock": {
+      "command": "C:\\Prj\\paperRock\\src-tauri\\target-pkg\\release\\paperrock-mcp.exe",
+      "args": [
+        "c:\\Prj\\newdoc",
+        "--vault",
+        "C:\\Users\\Mac\\paperRock-memory",
+        "--allow-write"
+      ]
+    }
+  }
+}

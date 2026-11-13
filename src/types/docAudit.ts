@@ -3,6 +3,7 @@ import type { ProjectWorkspace } from './document';
 export type DocTaxonomyStatus =
   | 'canonical'
   | 'healthy'
+  | 'module-doc'
   | 'stale'
   | 'duplicate'
   | 'deprecated'

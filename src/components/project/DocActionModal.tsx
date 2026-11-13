@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   X,
-  AlertTriangle,
   Archive,
   FileWarning,
   Trash2,
@@ -12,12 +11,28 @@ import {
   Link2,
   Wrench,
   RotateCcw,
-  CheckCircle2,
-  Clock,
   Link,
+  Play,
+  Tag,
+  Loader2,
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
 import { DetectedStackProfile, DocInventoryItem } from '../../types/docAudit';
+import { applyDriftFixes } from '../../services/docRemediation';
+import { DocPassportBadge, STATUS_META } from './docPassport';
+
+export interface DocActionHandlers {
+  onArchiveFile: (file: MarkdownFile) => Promise<void>;
+  onMarkDeprecated: (file: MarkdownFile, supersededByPath?: string) => Promise<void>;
+  onRestoreActive: (file: MarkdownFile) => Promise<void>;
+  onAutoFixStale: (file: MarkdownFile) => Promise<void>;
+  onLinkOrphanInReadme: (file: MarkdownFile) => Promise<void>;
+  onMarkScopedDoc: (file: MarkdownFile) => Promise<void>;
+  onClearScope: (file: MarkdownFile) => Promise<void>;
+  onDeleteFile: (file: MarkdownFile) => Promise<void>;
+  onRunAgent: (fileId: string) => void;
+  onRevealInExplorer: (file: MarkdownFile) => void;
+}
 
 interface DocActionModalProps {
   item: DocInventoryItem;
@@ -27,15 +42,26 @@ interface DocActionModalProps {
   isLocalFolder: boolean;
   onClose: () => void;
   onOpenInEditor: (fileId: string) => void;
-  onRevealInExplorer: (file: MarkdownFile) => void;
-  onArchiveFile: (file: MarkdownFile) => Promise<void>;
-  onMarkDeprecated: (file: MarkdownFile, supersededByPath?: string) => Promise<void>;
-  onRestoreActive?: (file: MarkdownFile) => Promise<void>;
-  onAutoFixStale?: (file: MarkdownFile) => Promise<void>;
-  onLinkOrphanInReadme?: (file: MarkdownFile) => Promise<void>;
-  onMarkScopedDoc?: (file: MarkdownFile) => Promise<void>;
-  onDeleteFile: (file: MarkdownFile) => Promise<void>;
+  actions: DocActionHandlers;
 }
+
+const BTN = 'px-3.5 py-2 rounded-lg border text-xs font-medium flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed';
+const BTN_PRIMARY = `${BTN} bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/40 text-emerald-200`;
+const BTN_INFO = `${BTN} bg-sky-500/20 hover:bg-sky-500/30 border-sky-500/40 text-sky-200`;
+const BTN_ARCHIVE = `${BTN} bg-indigo-500/20 hover:bg-indigo-500/30 border-indigo-500/40 text-indigo-200`;
+const BTN_WARN = `${BTN} bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-200`;
+const BTN_NEUTRAL = `${BTN} bg-[#262626] hover:bg-[#303030] border-[#3a3a3a] text-neutral-200`;
+
+const MODAL_TITLES: Record<DocInventoryItem['status'], string> = {
+  duplicate: 'Duplicate Comparison & Safe Resolution',
+  stale: 'Stale Document Review & Drift Fix',
+  deprecated: 'Deprecated Document Cleanup',
+  orphan: 'Orphan / Unlinked Note Actions',
+  'module-doc': 'Scoped Module Document',
+  'agent-system': 'Agent / Skill Specification',
+  canonical: 'Canonical Document',
+  healthy: 'Healthy Document',
+};
 
 export const DocActionModal: React.FC<DocActionModalProps> = ({
   item,
@@ -45,18 +71,19 @@ export const DocActionModal: React.FC<DocActionModalProps> = ({
   isLocalFolder,
   onClose,
   onOpenInEditor,
-  onRevealInExplorer,
-  onArchiveFile,
-  onMarkDeprecated,
-  onRestoreActive,
-  onAutoFixStale,
-  onLinkOrphanInReadme,
-  onMarkScopedDoc,
-  onDeleteFile,
+  actions,
 }) => {
   const [swapped, setSwapped] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busyAction) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, busyAction]);
 
   const isDuplicateMode = item.status === 'duplicate' && Boolean(canonicalItem);
   const canSwap = Boolean(isDuplicateMode && canonicalItem && canonicalItem.fileId !== item.fileId);
@@ -65,61 +92,68 @@ export const DocActionModal: React.FC<DocActionModalProps> = ({
 
   const targetFile = files.find((f) => f.id === activeTargetItem.fileId);
   const canonicalFile =
-    isDuplicateMode && activeCanonicalItem
-      ? files.find((f) => f.id === activeCanonicalItem.fileId)
-      : undefined;
+    isDuplicateMode && activeCanonicalItem ? files.find((f) => f.id === activeCanonicalItem.fileId) : undefined;
+
+  // Preview exactly what Auto-Sync will change before the user commits.
+  const driftPreview = useMemo(
+    () => (targetFile && item.status === 'stale' ? applyDriftFixes(targetFile.body, stackProfile).changes : []),
+    [targetFile, item.status, stackProfile]
+  );
 
   if (!targetFile) return null;
 
+  const status = item.status;
+  const busy = busyAction !== null;
   const hasIncomingRefs = activeTargetItem.incomingLinksCount > 0;
-  const isHealthyOrCanonical =
-    item.status === 'canonical' || item.status === 'healthy' || item.status === 'agent-system';
-  const allowDestructiveDelete =
-    item.status === 'duplicate' || item.status === 'deprecated' || item.status === 'orphan';
+  const isProtected = status === 'canonical' || status === 'healthy' || status === 'agent-system' || status === 'module-doc';
+  const allowDestructive = status === 'duplicate' || status === 'deprecated' || status === 'orphan';
+  const isArchived = /^_archive\//i.test(targetFile.path);
 
-  const runAction = async (fn: () => Promise<void>) => {
-    setBusy(true);
+  const run = (key: string, fn: () => Promise<void>) => async () => {
+    setBusyAction(key);
     try {
       await fn();
       onClose();
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
-  const modalTitle =
-    item.status === 'duplicate'
-      ? 'Duplicate Comparison & Safe Resolution'
-      : item.status === 'stale'
-        ? 'Stale Document Review & Drift Fix'
-        : item.status === 'deprecated'
-          ? 'Deprecated Document Cleanup'
-          : item.status === 'orphan'
-            ? 'Orphan / Unlinked Note Actions'
-            : 'Document Details & Quick Actions';
+  const ActionIcon: React.FC<{ k: string; Icon: React.ComponentType<{ className?: string }> }> = ({ k, Icon }) =>
+    busyAction === k ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !busy) onClose();
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={MODAL_TITLES[status]}
+    >
       <div className="w-full max-w-4xl max-h-[90vh] bg-[#1c1c1c] border border-[#323232] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-6 py-4 border-b border-[#2b2b2b] flex items-center justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-semibold text-neutral-100 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-sky-400" />
-              <span>{modalTitle}</span>
+              <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className="truncate">{MODAL_TITLES[status]}</span>
+              <DocPassportBadge item={item} detailed />
             </h3>
-            <p className="text-xs text-neutral-400 mt-0.5 font-mono">{activeTargetItem.path}</p>
+            <p className="text-xs text-neutral-400 mt-0.5 font-mono truncate">{activeTargetItem.path}</p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {canSwap && (
               <button
                 onClick={() => {
                   setSwapped((s) => !s);
                   setConfirmDelete(false);
                 }}
+                disabled={busy}
                 className="px-2.5 py-1.5 rounded-lg bg-[#262626] hover:bg-[#303030] border border-[#3a3a3a] text-xs text-neutral-200 flex items-center gap-1.5 transition"
-                title="Swap which file is kept as Canonical vs treated as Duplicate"
+                title="Swap which file is kept as canonical and which is treated as the duplicate"
               >
                 <ArrowLeftRight className="w-3.5 h-3.5 text-sky-400" />
                 <span>Swap Keep / Target</span>
@@ -127,6 +161,8 @@ export const DocActionModal: React.FC<DocActionModalProps> = ({
             )}
             <button
               onClick={onClose}
+              disabled={busy}
+              aria-label="Close"
               className="p-1.5 rounded-lg hover:bg-[#2a2a2a] text-neutral-400 hover:text-neutral-100 transition"
             >
               <X className="w-4 h-4" />
@@ -136,89 +172,78 @@ export const DocActionModal: React.FC<DocActionModalProps> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
-          {/* Status Summary Banner */}
-          {isHealthyOrCanonical && (
-            <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 flex items-center gap-2.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          {/* Why this passport */}
+          {isProtected ? (
+            <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 flex items-start gap-2.5">
+              {React.createElement(STATUS_META[status].Icon, { className: 'w-4 h-4 text-emerald-400 shrink-0 mt-0.5' })}
               <span>
-                This document is in a <strong>{item.status}</strong> state ({item.wordCount} words,{' '}
-                {item.incomingLinksCount} incoming link{item.incomingLinksCount === 1 ? '' : 's'}).
-                Destructive or duplicate actions are disabled to protect healthy project docs.
+                {STATUS_META[status].description} {item.wordCount} words · {item.incomingLinksCount} incoming link
+                {item.incomingLinksCount === 1 ? '' : 's'}. Destructive actions are hidden to protect this document.
               </span>
             </div>
-          )}
-
-          {item.status === 'stale' && (
-            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1.5">
-              <div className="font-semibold flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-amber-400" />
-                <span>Why this file is marked Stale:</span>
+          ) : (
+            item.issues.length > 0 && (
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1.5">
+                <div className="font-semibold">Why this file is marked {STATUS_META[status].label}:</div>
+                <ul className="list-disc list-inside space-y-0.5 text-amber-200/90">
+                  {item.issues.map((iss, i) => (
+                    <li key={i}>{iss}</li>
+                  ))}
+                </ul>
               </div>
-              <ul className="list-disc list-inside space-y-0.5 text-amber-200/90">
-                {item.issues.map((iss, i) => (
-                  <li key={i}>{iss}</li>
-                ))}
-              </ul>
-            </div>
+            )
           )}
 
-          {/* Reference Guard Warning (only when considering archive/delete on non-healthy docs) */}
-          {!isHealthyOrCanonical && hasIncomingRefs && (
+          {/* Reference guard */}
+          {!isProtected && hasIncomingRefs && (
             <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/40 text-xs text-amber-200 space-y-1">
               <div className="font-semibold flex items-center gap-1.5">
                 <Link2 className="w-4 h-4 text-amber-400" />
                 <span>
-                  Active References Detected ({activeTargetItem.incomingLinksCount} file
-                  {activeTargetItem.incomingLinksCount > 1 ? 's' : ''} link to this path)
+                  {activeTargetItem.incomingLinksCount} file{activeTargetItem.incomingLinksCount > 1 ? 's' : ''} link to this
+                  path
                 </span>
               </div>
               <p className="text-amber-200/85">
-                Referenced by:{' '}
-                <span className="font-mono">{activeTargetItem.referencedByFiles.join(', ')}</span>.
-                Prefer <strong>Mark Deprecated In-Place</strong> so existing links do not break.
+                Referenced by <span className="font-mono">{activeTargetItem.referencedByFiles.join(', ')}</span>. Prefer{' '}
+                <strong>Mark Deprecated In-Place</strong> so those links keep working.
               </p>
             </div>
           )}
 
-          {/* Preview: Side-by-Side ONLY for Duplicates; Single Preview for all other states */}
-          <div
-            className={`grid gap-4 ${
-              isDuplicateMode && canonicalFile && activeCanonicalItem
-                ? 'grid-cols-1 md:grid-cols-2'
-                : 'grid-cols-1'
-            }`}
-          >
+          {/* Previews: side by side for duplicates, single otherwise */}
+          <div className={`grid gap-4 ${isDuplicateMode && canonicalFile ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}`}>
             {isDuplicateMode && canonicalFile && activeCanonicalItem && (
               <div className="rounded-xl bg-[#161616] border border-emerald-500/30 flex flex-col overflow-hidden">
                 <div className="px-4 py-2.5 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
                   <span className="text-xs font-semibold text-emerald-300">Keep as Canonical</span>
                   <span className="text-[10px] font-mono text-emerald-300/80">
-                    Confidence Score {activeCanonicalItem.canonicalScore}
+                    Authority score {activeCanonicalItem.canonicalScore}
                   </span>
                 </div>
                 <div className="px-4 py-2 border-b border-[#252525] text-[11px] text-neutral-400 space-y-0.5">
                   <div className="font-mono text-neutral-200 truncate">{activeCanonicalItem.path}</div>
                   <div>
-                    {activeCanonicalItem.wordCount} words • {activeCanonicalItem.incomingLinksCount}{' '}
-                    incoming links
+                    {activeCanonicalItem.wordCount} words · {activeCanonicalItem.incomingLinksCount} incoming links
                     {activeCanonicalItem.lastModifiedMs
-                      ? ` • Updated ${new Date(activeCanonicalItem.lastModifiedMs).toLocaleDateString()}`
+                      ? ` · Updated ${new Date(activeCanonicalItem.lastModifiedMs).toLocaleDateString()}`
                       : ''}
                   </div>
                 </div>
                 <pre className="p-4 text-[11px] text-neutral-300 font-mono whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
-                  {canonicalFile.content.slice(0, 1800)}
+                  {canonicalFile.content.slice(0, 2400)}
                 </pre>
               </div>
             )}
 
             <div className="rounded-xl bg-[#161616] border border-[#2f2f2f] flex flex-col overflow-hidden">
-              <div className="px-4 py-2.5 bg-[#222] border-b border-[#2f2f2f] flex items-center justify-between">
+              <div className="px-4 py-2.5 bg-[#222] border-b border-[#2f2f2f] flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-neutral-200">
                   {isDuplicateMode ? 'Candidate Duplicate (Target)' : 'Document Preview'}
                 </span>
                 <span className="text-[10px] font-mono text-neutral-400">
-                  {activeTargetItem.category} • {activeTargetItem.wordCount} words
+                  {activeTargetItem.category} · {activeTargetItem.wordCount} words
+                  {isDuplicateMode && item.similarityScore !== undefined ? ` · ${item.similarityScore}% overlap` : ''}
                 </span>
               </div>
               <div className="px-4 py-2 border-b border-[#252525] text-[11px] text-neutral-400 space-y-0.5">
@@ -226,130 +251,132 @@ export const DocActionModal: React.FC<DocActionModalProps> = ({
                 <div>
                   {activeTargetItem.incomingLinksCount} incoming links
                   {activeTargetItem.lastModifiedMs
-                    ? ` • Updated ${new Date(activeTargetItem.lastModifiedMs).toLocaleDateString()}`
+                    ? ` · Updated ${new Date(activeTargetItem.lastModifiedMs).toLocaleDateString()}`
                     : ''}
                 </div>
               </div>
               <pre className="p-4 text-[11px] text-neutral-300 font-mono whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
-                {targetFile.content.slice(0, 1800)}
+                {targetFile.content.slice(0, 2400)}
               </pre>
             </div>
           </div>
 
-          {/* State-Specific Actions */}
+          {status === 'stale' && driftPreview.length > 0 && (
+            <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/25 text-[11px] text-emerald-200/90">
+              <span className="font-semibold text-emerald-300">Auto-Sync will change: </span>
+              <span className="font-mono">{driftPreview.join(' · ')}</span>
+              <span className="text-emerald-200/60"> and set updated_at to today.</span>
+            </div>
+          )}
+
+          {/* State-specific actions */}
           <div className="space-y-3 pt-2 border-t border-[#2a2a2a]">
             <div className="text-xs font-semibold text-neutral-200 uppercase tracking-wider">
-              Recommended Actions for <span className="text-sky-300">{item.status.toUpperCase()}</span> State
+              Actions for <span className="text-sky-300">{STATUS_META[status].label}</span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
-              {/* Always available: Open in Editor */}
               <button
                 disabled={busy}
                 onClick={() => {
                   onOpenInEditor(targetFile.id);
                   onClose();
                 }}
-                className="px-3.5 py-2 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 text-xs font-medium flex items-center gap-2 transition"
+                className={BTN_INFO}
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>Open in Editor</span>
               </button>
 
-              {/* STALE actions: Auto-fix port/SDK drift & touch updated_at */}
-              {item.status === 'stale' && onAutoFixStale && (
+              {status === 'agent-system' && (
                 <button
                   disabled={busy}
-                  onClick={() => runAction(() => onAutoFixStale(targetFile))}
-                  className="px-3.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-medium flex items-center gap-2 transition disabled:opacity-50"
+                  onClick={() => {
+                    actions.onRunAgent(targetFile.id);
+                    onClose();
+                  }}
+                  className={`${BTN} bg-purple-500/20 hover:bg-purple-500/30 border-purple-500/40 text-purple-200`}
                 >
-                  <Wrench className="w-3.5 h-3.5" />
-                  <span>
-                    Auto-Sync Drift &amp; Mark Reviewed
-                    {stackProfile.localPort ? ` (Port :${stackProfile.localPort})` : ''}
-                  </span>
+                  <Play className="w-3.5 h-3.5" />
+                  <span>Run in Agent Playground</span>
                 </button>
               )}
 
-              {/* ORPHAN actions: Link in README.md */}
-              {item.status === 'orphan' && onLinkOrphanInReadme && (
+              {status === 'module-doc' && targetFile.frontmatter.scope === 'module' && (
                 <button
                   disabled={busy}
-                  onClick={() => runAction(() => onLinkOrphanInReadme(targetFile))}
-                  className="px-3.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-medium flex items-center gap-2 transition disabled:opacity-50"
+                  onClick={run('scope', () => actions.onClearScope(targetFile))}
+                  className={BTN_NEUTRAL}
+                  title="Removes `scope: module` so the document is compared against the canonical doc again"
                 >
-                  <Link className="w-3.5 h-3.5" />
+                  <ActionIcon k="scope" Icon={Tag} />
+                  <span>Edit Scope (Remove Module Flag)</span>
+                </button>
+              )}
+
+              {status === 'stale' && (
+                <button disabled={busy} onClick={run('sync', () => actions.onAutoFixStale(targetFile))} className={BTN_PRIMARY}>
+                  <ActionIcon k="sync" Icon={Wrench} />
+                  <span>{driftPreview.length > 0 ? 'Auto-Sync Drift & Mark Reviewed' : 'Mark Reviewed Today'}</span>
+                </button>
+              )}
+
+              {status === 'orphan' && (
+                <button disabled={busy} onClick={run('adopt', () => actions.onLinkOrphanInReadme(targetFile))} className={BTN_PRIMARY}>
+                  <ActionIcon k="adopt" Icon={Link} />
                   <span>Add Link in README.md (Adopt Doc)</span>
                 </button>
               )}
 
-              {/* DEPRECATED action: Restore to Active */}
-              {item.status === 'deprecated' && onRestoreActive && (
-                <button
-                  disabled={busy}
-                  onClick={() => runAction(() => onRestoreActive(targetFile))}
-                  className="px-3.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-medium flex items-center gap-2 transition disabled:opacity-50"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Restore to Active Status</span>
+              {status === 'deprecated' && (
+                <button disabled={busy} onClick={run('restore', () => actions.onRestoreActive(targetFile))} className={BTN_PRIMARY}>
+                  <ActionIcon k="restore" Icon={RotateCcw} />
+                  <span>{isArchived ? 'Restore from _archive/ to Active' : 'Restore to Active Status'}</span>
                 </button>
               )}
 
-              {/* DUPLICATE: Keep Both (Mark as Scoped Module Doc) */}
-              {item.status === 'duplicate' && onMarkScopedDoc && (
+              {status === 'duplicate' && (
                 <button
                   disabled={busy}
-                  onClick={() => runAction(() => onMarkScopedDoc(targetFile))}
-                  className="px-3.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-medium flex items-center gap-2 transition disabled:opacity-50"
-                  title="Marks frontmatter scope: module so unrelated submodule READMEs are never flagged as duplicates"
+                  onClick={run('keep', () => actions.onMarkScopedDoc(targetFile))}
+                  className={BTN_PRIMARY}
+                  title="Sets `scope: module` in frontmatter so this file is never flagged as a duplicate again"
                 >
-                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <ActionIcon k="keep" Icon={ShieldCheck} />
                   <span>Keep Both (Mark as Module Doc)</span>
                 </button>
               )}
 
-              {/* DUPLICATE / DEPRECATED / ORPHAN: Archive to _archive/ */}
-              {(item.status === 'duplicate' ||
-                item.status === 'deprecated' ||
-                item.status === 'orphan') && (
-                <button
-                  disabled={busy}
-                  onClick={() => runAction(() => onArchiveFile(targetFile))}
-                  className="px-3.5 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-200 text-xs font-medium flex items-center gap-2 transition disabled:opacity-50"
-                >
-                  <Archive className="w-3.5 h-3.5" />
-                  <span>Move to _archive/ (Safe &amp; Reversible)</span>
+              {allowDestructive && !isArchived && (
+                <button disabled={busy} onClick={run('archive', () => actions.onArchiveFile(targetFile))} className={BTN_ARCHIVE}>
+                  <ActionIcon k="archive" Icon={Archive} />
+                  <span>Move to _archive/ (Reversible)</span>
                 </button>
               )}
 
-              {/* DUPLICATE / STALE: Mark Deprecated In-Place */}
-              {(item.status === 'duplicate' || item.status === 'stale') && (
+              {(status === 'duplicate' || status === 'stale') && (
                 <button
                   disabled={busy}
-                  onClick={() =>
-                    runAction(() => onMarkDeprecated(targetFile, activeCanonicalItem?.path))
-                  }
-                  className="px-3.5 py-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-medium flex items-center gap-2 transition disabled:opacity-50"
+                  onClick={run('deprecate', () =>
+                    actions.onMarkDeprecated(targetFile, status === 'duplicate' ? activeCanonicalItem?.path : undefined)
+                  )}
+                  className={BTN_WARN}
                 >
-                  <FileWarning className="w-3.5 h-3.5" />
+                  <ActionIcon k="deprecate" Icon={FileWarning} />
                   <span>Mark Deprecated In-Place (Keep Path)</span>
                 </button>
               )}
 
               {isLocalFolder && targetFile.fullPath && (
-                <button
-                  disabled={busy}
-                  onClick={() => onRevealInExplorer(targetFile)}
-                  className="px-3.5 py-2 rounded-lg bg-[#262626] hover:bg-[#303030] border border-[#3a3a3a] text-neutral-200 text-xs font-medium flex items-center gap-2 transition"
-                >
+                <button disabled={busy} onClick={() => actions.onRevealInExplorer(targetFile)} className={BTN_NEUTRAL}>
                   <FolderOpen className="w-3.5 h-3.5" />
                   <span>Reveal in Explorer</span>
                 </button>
               )}
             </div>
 
-            {/* Guarded Permanent Delete ONLY for duplicate, deprecated, or orphan */}
-            {allowDestructiveDelete && (
+            {/* Guarded permanent delete: duplicates, deprecated and orphans only */}
+            {allowDestructive && (
               <div className="mt-3 p-3 rounded-xl bg-rose-950/20 border border-rose-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <label className="flex items-center gap-2 text-xs text-rose-200/90 cursor-pointer select-none">
                   <input
@@ -359,17 +386,17 @@ export const DocActionModal: React.FC<DocActionModalProps> = ({
                     className="rounded border-rose-500/50 bg-[#1a1a1a]"
                   />
                   <span>
-                    I have verified <code className="font-mono text-rose-300">{activeTargetItem.path}</code>{' '}
-                    is not needed and want to permanently delete it
+                    I have verified <code className="font-mono text-rose-300">{activeTargetItem.path}</code> is not needed
+                    and want to delete it permanently
                   </span>
                 </label>
 
                 <button
                   disabled={!confirmDelete || busy}
-                  onClick={() => runAction(() => onDeleteFile(targetFile))}
+                  onClick={run('delete', () => actions.onDeleteFile(targetFile))}
                   className="px-3 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-white text-xs font-medium flex items-center gap-1.5 transition disabled:opacity-35 disabled:cursor-not-allowed shrink-0"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <ActionIcon k="delete" Icon={Trash2} />
                   <span>Delete Permanently</span>
                 </button>
               </div>

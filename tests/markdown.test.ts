@@ -271,7 +271,7 @@ test('DocHealthAuditor: treats unrelated submodule READMEs as scoped module docs
   const dupDoc = report.inventory.find((i) => i.path === 'docs/README.md');
 
   assert.ok(authDoc);
-  assert.strictEqual(authDoc.status, 'healthy');
+  assert.strictEqual(authDoc.status, 'module-doc');
   assert.strictEqual(authDoc.isScopedModuleDoc, true);
 
   assert.ok(dupDoc);

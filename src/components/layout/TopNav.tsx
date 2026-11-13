@@ -27,7 +27,8 @@ import {
   Archive,
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
-import { DocInventoryItem, DocTaxonomyStatus } from '../../types/docAudit';
+import { DocInventoryItem } from '../../types/docAudit';
+import { STATUS_META, passportLabel } from '../project/docPassport';
 
 interface TopNavProps {
   activeFile: MarkdownFile | null;
@@ -47,16 +48,6 @@ interface TopNavProps {
   onOpenProjectOverview?: () => void;
 }
 
-const PASSPORT_STYLE: Record<DocTaxonomyStatus, { label: string; cls: string; icon: React.ReactNode }> = {
-  canonical: { label: 'Canonical', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/30', icon: <ShieldCheck className="w-3 h-3" /> },
-  healthy: { label: 'Healthy', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', icon: <CheckCircle2 className="w-3 h-3" /> },
-  stale: { label: 'Stale', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30', icon: <Clock className="w-3 h-3" /> },
-  duplicate: { label: 'Duplicate', cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30', icon: <Copy className="w-3 h-3" /> },
-  deprecated: { label: 'Deprecated', cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30', icon: <Archive className="w-3 h-3" /> },
-  orphan: { label: 'Orphan', cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30', icon: <AlertTriangle className="w-3 h-3" /> },
-  'agent-system': { label: 'Agent / Skill', cls: 'bg-purple-500/15 text-purple-300 border-purple-500/30', icon: <Bot className="w-3 h-3" /> },
-};
-
 export const TopNav: React.FC<TopNavProps> = ({
   activeFile,
   projectName,
@@ -74,6 +65,9 @@ export const TopNav: React.FC<TopNavProps> = ({
   onToggleSidebar,
   onOpenProjectOverview,
 }) => {
+  // Hooks must run before any early return (closing the last tab renders the empty header).
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
   if (!activeFile) {
     return (
       <header className="h-12 border-b border-[#2f2f2f] bg-[#191919] px-4 flex items-center justify-between text-xs text-neutral-400">
@@ -84,7 +78,6 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   const type = activeFile.frontmatter.type || 'document';
   const readingTime = Math.ceil((activeFile.wordCount || 1) / 200);
-  const [showExportMenu, setShowExportMenu] = useState(false);
 
   const downloadFile = (filename: string, content: string, mime: string) => {
     const blob = new Blob([content], { type: mime });
@@ -196,26 +189,20 @@ export const TopNav: React.FC<TopNavProps> = ({
           <span className="font-semibold text-neutral-200 truncate">{activeFile.frontmatter.title || activeFile.name}</span>
         </div>
         {getTypeBadge()}
-        {activeDocAudit && (
-          <button
-            onClick={onOpenDocPassport}
-            className={`px-2 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1 transition hover:brightness-110 shrink-0 ${
-              PASSPORT_STYLE[activeDocAudit.status].cls
-            }`}
-            title={
-              activeDocAudit.issues.length > 0
-                ? `DocPassport: ${activeDocAudit.issues[0]} (Click for actions)`
-                : `DocPassport: ${activeDocAudit.isScopedModuleDoc ? 'Scoped Module Doc' : PASSPORT_STYLE[activeDocAudit.status].label} (Click for details)`
-            }
-          >
-            {PASSPORT_STYLE[activeDocAudit.status].icon}
-            <span>
-              {activeDocAudit.isScopedModuleDoc
-                ? 'Module Doc'
-                : PASSPORT_STYLE[activeDocAudit.status].label}
-            </span>
-          </button>
-        )}
+        {activeDocAudit && (() => {
+          const meta = STATUS_META[activeDocAudit.status];
+          const label = passportLabel(activeDocAudit);
+          return (
+            <button
+              onClick={onOpenDocPassport}
+              className={`px-2 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1 transition hover:brightness-125 shrink-0 ${meta.badgeClass}`}
+              title={`DocPassport: ${label}${activeDocAudit.issues.length > 0 ? ` (${activeDocAudit.issues[0]})` : ''}. Click for actions.`}
+            >
+              <meta.Icon className="w-3 h-3" />
+              <span>{label}</span>
+            </button>
+          );
+        })()}
         {activeFile.isDirty && (
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="Unsaved changes" />
         )}

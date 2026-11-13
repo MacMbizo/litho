@@ -28,7 +28,8 @@ import {
   FolderGit2
 } from 'lucide-react';
 import { MarkdownFile, ViewMode, DocType, FileTreeNode, ProjectWorkspace } from '../../types/document';
-import { PortfolioProjectSummary } from '../../types/docAudit';
+import { PortfolioProjectSummary, ProjectDocAuditReport, DocInventoryItem } from '../../types/docAudit';
+import { STATUS_META, passportLabel } from '../project/docPassport';
 import { FileContextMenu, ContextMenuState } from './FileContextMenu';
 
 interface SidebarProps {
@@ -38,6 +39,8 @@ interface SidebarProps {
   portfolioProjects?: PortfolioProjectSummary[];
   portfolioRootPath?: string | null;
   onSelectPortfolioProject?: (workspace: ProjectWorkspace, fileId?: string) => void;
+  onOpenSampleVault?: () => void;
+  auditReport?: ProjectDocAuditReport;
   activeFileId: string | null;
   onSelectFile: (id: string) => void;
   onNewFile: (type: DocType, targetFolder?: string) => void;
@@ -66,6 +69,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   portfolioProjects,
   portfolioRootPath,
   onSelectPortfolioProject,
+  onOpenSampleVault,
+  auditReport,
   activeFileId,
   onSelectFile,
   onNewFile,
@@ -91,6 +96,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [treeTab, setTreeTab] = useState<'files' | 'portfolio'>('files');
   const [showProjectSwitcher, setShowProjectSwitcher] = useState<boolean>(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const passportById = React.useMemo(() => {
+    const map = new Map<string, DocInventoryItem>();
+    for (const item of auditReport?.inventory || []) map.set(item.fileId, item);
+    return map;
+  }, [auditReport]);
   const isResizingRef = React.useRef(false);
 
   const startResizing = (e: React.MouseEvent) => {
@@ -244,6 +254,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {(() => {
+              const passport = matchingFile ? passportById.get(matchingFile.id) : undefined;
+              if (!passport || !['stale', 'duplicate', 'orphan', 'deprecated'].includes(passport.status)) return null;
+              return (
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${STATUS_META[passport.status].dotClass}`}
+                  title={`DocPassport: ${passportLabel(passport)}`}
+                  aria-label={passportLabel(passport)}
+                />
+              );
+            })()}
             {matchingFile?.isDirty && (
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400" title="Unsaved" />
             )}
@@ -341,6 +362,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
               );
             })}
             <div className="border-t border-[#323238] mt-1 pt-1">
+              {onOpenSampleVault && (
+                <button
+                  onClick={() => {
+                    onOpenSampleVault();
+                    setShowProjectSwitcher(false);
+                    setTreeTab('files');
+                  }}
+                  className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-1.5 transition ${
+                    project && !project.isLocalFolder ? 'bg-indigo-500/20 text-indigo-200' : 'text-neutral-300 hover:bg-[#2c2c32]'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Sample Vault</span>
+                </button>
+              )}
               <button
                 onClick={() => {
                   onSelectViewMode('portfolio');

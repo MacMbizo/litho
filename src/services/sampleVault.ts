@@ -1,5 +1,6 @@
 import { MarkdownFile, FileTreeNode, ProjectWorkspace } from '../types/document';
 import { MarkdownService } from './markdown';
+import { buildTreeFromFiles } from './fileTree';
 
 export const INITIAL_FILES: { path: string; name: string; raw: string }[] = [
   {
@@ -209,7 +210,129 @@ We store all user data as standard GitHub Flavored Markdown files with YAML fron
 - **Positive**: Zero cloud subscription dependency.
 - **Positive**: Git-friendly; every change is a readable text diff.
 `
-  }
+  },
+  // ---- DocAtlas demo documents: one per DocPassport state ----
+  {
+    path: 'README.md',
+    name: 'README.md',
+    raw: `---
+title: "Nexus Workspace"
+type: "project"
+status: "Active"
+tags: ["readme", "overview"]
+---
+
+# Nexus Workspace
+
+Local-first knowledge base for the Nexus agent platform. Specs, agents and skills live here as plain Markdown so they can be versioned with the code.
+
+## Quick Start
+
+Install dependencies with npm install, then run npm run dev and open http://localhost:3000 in your browser.
+
+## Documentation
+
+- [Setup Guide](docs/SETUP.md)
+- [ADR 001: Local-First Storage](docs/architecture-adr-001.md)
+- [Agent Runtime Package](packages/agent-runtime/README.md)
+- [Deployment Notes](docs/deploy-notes.md)
+`,
+  },
+  {
+    path: 'docs/SETUP.md',
+    name: 'SETUP.md',
+    raw: `---
+title: "Setup Guide"
+type: "document"
+status: "Active"
+tags: ["setup", "onboarding"]
+---
+
+# Setup Guide
+
+1. Install Node.js 22 and run npm install from the repository root.
+2. Copy .env.example to .env and add your local model endpoint.
+3. Start the renderer with npm run dev; Vite serves the app on http://localhost:5173.
+4. Seed the sample vault by opening the Sample Vault from the project switcher.
+
+Questions go to the team channel; see the [README](../README.md) for the overview.
+`,
+  },
+  {
+    path: 'docs/SETUP-copy.md',
+    name: 'SETUP-copy.md',
+    raw: `---
+title: "Setup Guide"
+type: "document"
+status: "Active"
+tags: ["setup", "onboarding"]
+---
+
+# Setup Guide
+
+1. Install Node.js 22 and run npm install from the repository root.
+2. Copy .env.example to .env and add your local model endpoint.
+3. Start the renderer with npm run dev; Vite serves the app on http://localhost:5173.
+4. Seed the sample vault by opening the Sample Vault from the project switcher.
+`,
+  },
+  {
+    path: 'packages/agent-runtime/README.md',
+    name: 'README.md',
+    raw: `---
+title: "Agent Runtime Package"
+type: "document"
+status: "Active"
+tags: ["package", "runtime"]
+---
+
+# Agent Runtime
+
+Executes agent manifests in an isolated worker: resolves declared tools, streams model tokens over a message channel, and enforces per-tool timeouts and token budgets. Exposes a small typed API consumed by the Agent Playground.
+`,
+  },
+  {
+    path: 'notes/scratchpad.md',
+    name: 'scratchpad.md',
+    raw: `# Scratchpad
+
+- try hybrid BM25 + vector ranking for project chat
+- graph view: cluster by folder?
+- ask about exporting kanban boards to PDF
+`,
+  },
+  {
+    path: 'docs/legacy-sync-design.md',
+    name: 'legacy-sync-design.md',
+    raw: `---
+title: "Cloud Sync Design (v0)"
+type: "document"
+status: "Active"
+tags: ["sync", "design"]
+---
+
+> [!WARNING] **Deprecated:** Superseded by [ADR 001](architecture-adr-001.md).
+
+# Cloud Sync Design (v0)
+
+The original plan mirrored every note to a hosted database and resolved conflicts on the server. It was dropped in favour of local-first Markdown files.
+`,
+  },
+  {
+    path: 'docs/deploy-notes.md',
+    name: 'deploy-notes.md',
+    raw: `---
+title: "Deployment Notes"
+type: "document"
+status: "Active"
+tags: ["deployment", "release"]
+---
+
+# Deployment Notes
+
+Desktop builds are produced with npm run build followed by electron-builder. Release candidates are smoke-tested against the sample vault and a large local project before tagging. See the [release checklist](release-checklist.md).
+`,
+  },
 ];
 
 export function getSampleVault(): MarkdownFile[] {
@@ -231,105 +354,25 @@ export function getSampleVault(): MarkdownFile[] {
 
 export function getSampleWorkspace(): ProjectWorkspace {
   const files = getSampleVault();
-  
-  const tree: FileTreeNode = {
-    id: 'root',
-    name: 'Sample Vault',
-    path: '',
-    isFolder: true,
-    children: [
-      {
-        id: 'projects',
-        name: 'projects',
-        path: 'projects',
-        isFolder: true,
-        itemCount: 1,
-        children: [
-          {
-            id: 'projects/project-nexus.md',
-            name: 'project-nexus.md',
-            path: 'projects/project-nexus.md',
-            isFolder: false,
-            docType: 'project',
-            metadata: files[0].frontmatter,
-          }
-        ]
-      },
-      {
-        id: 'agents',
-        name: 'agents',
-        path: 'agents',
-        isFolder: true,
-        itemCount: 2,
-        children: [
-          {
-            id: 'agents/senior-code-reviewer.md',
-            name: 'senior-code-reviewer.md',
-            path: 'agents/senior-code-reviewer.md',
-            isFolder: false,
-            docType: 'agent',
-            metadata: files[1].frontmatter,
-          },
-          {
-            id: 'agents/executive-briefing-agent.md',
-            name: 'executive-briefing-agent.md',
-            path: 'agents/executive-briefing-agent.md',
-            isFolder: false,
-            docType: 'agent',
-            metadata: files[2].frontmatter,
-          }
-        ]
-      },
-      {
-        id: 'skills',
-        name: 'skills',
-        path: 'skills',
-        isFolder: true,
-        itemCount: 2,
-        children: [
-          {
-            id: 'skills/rag-vector-search.md',
-            name: 'rag-vector-search.md',
-            path: 'skills/rag-vector-search.md',
-            isFolder: false,
-            docType: 'skill',
-            metadata: files[3].frontmatter,
-          },
-          {
-            id: 'skills/markdown-pdf-exporter.md',
-            name: 'markdown-pdf-exporter.md',
-            path: 'skills/markdown-pdf-exporter.md',
-            isFolder: false,
-            docType: 'skill',
-            metadata: files[4].frontmatter,
-          }
-        ]
-      },
-      {
-        id: 'docs',
-        name: 'docs',
-        path: 'docs',
-        isFolder: true,
-        itemCount: 1,
-        children: [
-          {
-            id: 'docs/architecture-adr-001.md',
-            name: 'architecture-adr-001.md',
-            path: 'docs/architecture-adr-001.md',
-            isFolder: false,
-            docType: 'document',
-            metadata: files[5].frontmatter,
-          }
-        ]
-      }
-    ]
-  };
-
   return {
     name: 'Sample Workspace',
     rootPath: 'sample-vault',
     isLocalFolder: false,
-    tree,
+    tree: buildTreeFromFiles(files, 'Sample Vault'),
     files,
+    // A small manifest so DocAtlas can demonstrate stack detection and port-drift checks in the browser.
+    configFiles: {
+      'package.json': JSON.stringify(
+        {
+          name: 'nexus-workspace',
+          private: true,
+          scripts: { dev: 'vite', build: 'tsc && vite build', test: 'node --test' },
+          dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0' },
+          devDependencies: { vite: '^5.4.0', typescript: '^5.4.0', electron: '^30.0.0', tailwindcss: '^3.4.0' },
+        },
+        null,
+        2
+      ),
+    },
   };
 }
