@@ -1,6 +1,6 @@
 # Handoff: Notion Markdown Studio / DocAtlas
 
-_Last updated 2026-11-13. Branch `master` (main branch is `main`; no git remote)._
+_Last updated 2026-11-13. Branch `main`, pushed to https://github.com/MacMbizo/litho._
 
 ## What this is
 
