@@ -17,7 +17,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (38) | `npm test` |
+| Unit tests (41) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -49,14 +49,25 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 - **Fixed in the same pass:**
   - Editing a file without frontmatter used to inject `type`/`title`/`tags` YAML. This affected every README in every project. `MarkdownService.rebuild` now keeps a plain file plain unless its properties actually change.
   - "New File in Folder" joined an absolute folder path onto the project root.
+- **Rename from heading:**
+  - When you move on from an auto-named note (`Note YYYY-MM-DD HHMM.md`, by another tab, closing it, or switching workspace), the file takes its first H1 as its name. This is `noteNameFromHeading` plus `renameNoteFromHeading` in `App.tsx`.
+  - It uses `movePathSafe`, so nothing is ever overwritten.
+  - Names the user chose, and files opened from elsewhere, are never renamed.
+  - **Gotcha:** scanned `fullPath`s use backslashes, so run `normalizeFsPath` before splitting on `/`. Before that fix, a test run renamed a note into a folder called `Note ….m`.
+- **Notes folder setting:**
+  - It's in Settings (the modal is now titled "Settings") and stored as `folder` in `notes.json`.
+  - `notes:getFolder(preferred)` falls back to the default when the chosen folder can't be used.
+  - Changing the folder doesn't move existing notes.
+- **Opening files from outside the app:**
+  - `npm start -- "C:\path\file.md"` opens that file. Launch files take priority over restoring the last workspace.
+  - Single-instance lock: a second launch hands its .md files to the running window (`app:openFiles`) and exits. **This means two copies of DocAtlas can't run at once.**
 - **Verified:**
-  - 38 unit tests.
-  - An 18-step Electron run with the native dialogs stubbed: new note, autosave, open an outside file, Save as, Remove, relaunch, a project file opening in its project, and no console errors.
-  - The test script is not in the repo.
-- **Ideas not built:**
-  - Rename a note's file from its heading.
-  - A setting to choose the notes folder.
-  - Registering as the Windows handler for .md files (needs packaging).
+  - 41 unit tests.
+  - Two Electron runs with the native dialogs stubbed, 18 + 19 steps, all passing:
+    - Run 1: new note, autosave, open an outside file, Save as, Remove, relaunch, a project file opening in its project.
+    - Run 2: a launch file, second-instance handoff, rename from heading, folder change and reset.
+  - No console errors. The test scripts are not in the repo.
+- **Not built:** registering DocAtlas with Explorer ("Open with" / double-click .md). This needs packaging, e.g. electron-builder with `fileAssociations`. That's a new dev dependency, so it waits for the owner's go-ahead. The app side (argv plus single instance) is already done.
 
 ## Where things live
 

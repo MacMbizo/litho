@@ -70,6 +70,59 @@ export function newNoteContent(fileName: string): string {
   return `# ${fileName.replace(/\.md$/i, '')}\n\n`;
 }
 
+/** Names Ctrl+N gives a note ("Note 2026-11-13 0905.md", "… 0905 2.md"). Only these get renamed. */
+const AUTO_NOTE_NAME = /^Note \d{4}-\d{2}-\d{2} \d{4}( \d+)?\.md$/i;
+
+export function isAutoNoteName(name: string): boolean {
+  return AUTO_NOTE_NAME.test(name);
+}
+
+/** Text of the first level-1 heading outside fenced code, or null. */
+export function firstHeading(body: string): string | null {
+  let inFence = false;
+  for (const line of body.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = line.match(/^#\s+(.+?)\s*#*\s*$/);
+    if (m) return m[1].trim() || null;
+  }
+  return null;
+}
+
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/** Turns a heading into a file name stem that is valid on Windows, macOS and Linux, or null. */
+export function safeFileStem(title: string): string | null {
+  let stem = title
+    .replace(/[*_`~[\]]/g, '') // markdown emphasis/link punctuation
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '');
+  if (stem.length > 80) stem = stem.slice(0, 80).replace(/[. ]+$/, '');
+  if (!stem) return null;
+  if (WINDOWS_RESERVED.test(stem)) stem = `${stem} note`;
+  return stem;
+}
+
+/**
+ * The file name a note should take from its heading, or null to leave it alone. Only auto-named notes
+ * are renamed, so a name the user chose themselves is never changed.
+ */
+export function noteNameFromHeading(currentName: string, body: string): string | null {
+  if (!isAutoNoteName(currentName)) return null;
+  const heading = firstHeading(body);
+  if (!heading) return null;
+  const stem = safeFileStem(heading);
+  if (!stem) return null;
+  const currentStem = currentName.replace(/\.md$/i, '');
+  if (stem.toLowerCase() === currentStem.toLowerCase() || isAutoNoteName(`${stem}.md`)) return null;
+  return `${stem}.md`;
+}
+
 export interface ExternalFile {
   fullPath: string;
   content: string;

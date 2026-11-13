@@ -44,15 +44,20 @@ import {
   newNoteContent,
   findOwningRoot,
   isElsewhereId,
+  baseName,
   newNoteFileName,
+  normalizeFsPath,
+  noteNameFromHeading,
   relativeInside,
   samePath,
 } from './services/notesWorkspace';
 import {
+  getDefaultNotesFolder,
   getNotesFolder,
   loadExternalPaths,
   loadNotesWorkspace,
   saveExternalPaths,
+  setNotesFolder,
   withExternalPaths,
 } from './services/notesStore';
 
@@ -120,6 +125,10 @@ const AppContent: React.FC = () => {
   const notesDirRef = useRef<string | null>(null);
   const externalPathsRef = useRef<string[] | null>(null);
   const showNotesRef = useRef<(opts?: { keepView?: boolean }) => Promise<unknown>>(async () => null);
+  const openPathsRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
+  const renameNoteRef = useRef<(note: MarkdownFile) => Promise<void>>(async () => {});
+  const [notesFolderShown, setNotesFolderShown] = useState<string | null>(null);
+  const [defaultNotesFolder, setDefaultNotesFolder] = useState<string | null>(null);
 
   const handleWidthChange = (w: number) => {
     setSidebarWidth(w);
@@ -136,6 +145,9 @@ const AppContent: React.FC = () => {
   // Close tab
   const handleCloseTab = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    // Closing the active note is handled by the note-rename effect; a background tab is handled here.
+    const closing = files.find((f) => f.id === id);
+    if (closing && id !== activeFileId && workspace.kind === 'notes') renameNoteRef.current(closing);
     const nextOpen = openFileIds.filter((tabId) => tabId !== id);
     setOpenFileIds(nextOpen);
     if (activeFileId === id) {
@@ -305,6 +317,12 @@ const AppContent: React.FC = () => {
     if (!ProjectScannerService.isElectron()) return;
 
     const savedPath = localStorage.getItem(SAVED_WORKSPACE_PATH_KEY);
+    // Files the app was launched with ("Open with", command line) win over restoring the last workspace.
+    const launchFiles: Promise<string[]> = window.electronAPI?.takeLaunchFiles
+      ? window.electronAPI.takeLaunchFiles().catch(() => [])
+      : Promise.resolve([]);
+    launchFiles.then((launched) => {
+    if (launched.length > 0) return;
     if (savedPath) {
       getNotesFolder()
         .then((dir) => {
@@ -324,11 +342,14 @@ const AppContent: React.FC = () => {
         })
         .catch(() => localStorage.removeItem(SAVED_WORKSPACE_PATH_KEY));
     }
+    });
 
     // Portfolio: show the remembered scan instantly, then refresh quietly only when it's old.
     loadPortfolioSnapshot().then((snap) => {
       if (snap) {
         const restored = fromSnapshot(snap);
+        // Launch files are opened right after this; let them see which projects exist before React re-renders.
+        portfolioProjectsRef.current = restored;
         setPortfolioRoots(snap.roots);
         setPortfolioProjects(restored);
         setPortfolioSavedAt(snap.projects.length > 0 ? snap.savedAt : null);
@@ -344,6 +365,9 @@ const AppContent: React.FC = () => {
         }
       }
       portfolioLoadedRef.current = true;
+      launchFiles.then((launched) => {
+        if (launched.length > 0) openPathsRef.current(launched);
+      });
     });
   }, []);
 
@@ -843,7 +867,53 @@ const AppContent: React.FC = () => {
     if (!notesDirRef.current) notesDirRef.current = await getNotesFolder();
     if (!notesDirRef.current) throw new Error('Notes need the desktop app');
     if (!externalPathsRef.current) externalPathsRef.current = await loadExternalPaths();
+    setNotesFolderShown(notesDirRef.current);
     return notesDirRef.current;
+  };
+
+  /** Settings: point Notes at another folder (null = back to Documents\DocAtlas Notes). Files are not moved. */
+  const handleChangeNotesFolder = async (choose: boolean) => {
+    let picked: string | null = null;
+    if (choose) {
+      picked = await window.electronAPI?.openDirectory?.() ?? null;
+      if (!picked) return;
+    }
+    const inUse = await setNotesFolder(picked);
+    if (!inUse) return;
+    if (picked && !samePath(inUse, picked)) {
+      toast('Folder Not Usable', `${picked} could not be used; Notes stay in ${inUse}`, 'error');
+    }
+    const changed = !notesDirRef.current || !samePath(inUse, notesDirRef.current);
+    notesDirRef.current = inUse;
+    setNotesFolderShown(inUse);
+    if (changed && workspaceRef.current.kind === 'notes') await showNotes(undefined, { reset: true });
+    if (changed) toast('Notes Folder Changed', inUse, 'success');
+  };
+
+  /**
+   * An auto-named note ("Note 2026-11-13 0905.md") takes its heading as file name once you move on
+   * from it. Names you chose, and files opened from elsewhere, are never renamed; nothing is overwritten.
+   */
+  const renameNoteFromHeading = async (note: MarkdownFile) => {
+    const dir = notesDirRef.current;
+    if (!dir || !note.fullPath || isElsewhereId(note.id) || !window.electronAPI?.movePathSafe) return;
+    if (relativeInside(note.fullPath, dir) === null) return;
+    const target = noteNameFromHeading(note.name, note.body);
+    if (!target) return;
+    try {
+      // Scanned paths use the OS separator (backslashes on Windows); normalize before splitting.
+      const fullPath = normalizeFsPath(note.fullPath);
+      const folder = fullPath.slice(0, fullPath.lastIndexOf('/'));
+      const finalPath = normalizeFsPath(await window.electronAPI.movePathSafe(note.fullPath, `${folder}/${target}`));
+      const newId = relativeInside(finalPath, dir);
+      if (!newId) return;
+      setOpenFileIds((prev) => prev.map((id) => (id === note.id ? newId : id)));
+      setActiveFileId((prev) => (prev === note.id ? newId : prev));
+      if (workspaceRef.current.kind === 'notes') await showNotes();
+      toast('Note Renamed', baseName(finalPath), 'info');
+    } catch (err: any) {
+      toast('Could Not Rename Note', err?.message || target, 'error');
+    }
   };
 
   /**
@@ -852,7 +922,7 @@ const AppContent: React.FC = () => {
    */
   const showNotes = async (
     select?: (ws: ProjectWorkspace) => string[],
-    opts?: { keepView?: boolean }
+    opts?: { keepView?: boolean; reset?: boolean }
   ): Promise<ProjectWorkspace | null> => {
     try {
       const dir = await ensureNotesFolder();
@@ -861,7 +931,8 @@ const AppContent: React.FC = () => {
         externalPathsRef.current = kept;
         saveExternalPaths(kept);
       }
-      const wasNotes = workspaceRef.current.kind === 'notes';
+      // reset: the folder changed, so old tabs would point at same-named files in the new folder.
+      const wasNotes = workspaceRef.current.kind === 'notes' && !opts?.reset;
       const wanted = (select?.(ws) ?? []).filter((id) => ws.files.some((f) => f.id === id));
       applyRefreshedWorkspace(ws);
       if (wasNotes) {
@@ -885,6 +956,16 @@ const AppContent: React.FC = () => {
     }
   };
   showNotesRef.current = (opts) => showNotes(undefined, opts);
+  renameNoteRef.current = renameNoteFromHeading;
+
+  // Moving on from a note (another tab, another workspace, closing it) is when it takes its heading as name.
+  const currentNote = workspace.kind === 'notes' ? activeFile : null;
+  const noteSnapshotRef = useRef<MarkdownFile | null>(null);
+  useEffect(() => {
+    const previous = noteSnapshotRef.current;
+    noteSnapshotRef.current = currentNote;
+    if (previous && previous.id !== currentNote?.id) renameNoteRef.current(previous);
+  }, [currentNote]);
 
   const handleOpenNotes = () => {
     if (workspace.kind === 'notes') setViewMode('editor');
@@ -919,8 +1000,10 @@ const AppContent: React.FC = () => {
    */
   const openMarkdownPaths = async (paths: string[], quiet = false) => {
     if (paths.length === 0) return;
+    // Read through refs: this also runs from startup and from other windows' "open file" requests.
+    const workspace = workspaceRef.current;
     const projectRoots = [
-      ...portfolioProjects.map((e) => e.workspace.rootPath),
+      ...portfolioProjectsRef.current.map((e) => e.workspace.rootPath),
       ...(workspace.isLocalFolder && workspace.kind !== 'notes' ? [workspace.rootPath] : []),
     ];
     const owner = findOwningRoot(paths[0], projectRoots);
@@ -969,6 +1052,22 @@ const AppContent: React.FC = () => {
     const paths = await window.electronAPI.openMarkdownFiles();
     await openMarkdownPaths(paths);
   };
+  openPathsRef.current = (paths) => openMarkdownPaths(paths);
+
+  // Settings shows where notes live; fetch it the first time the dialog opens.
+  useEffect(() => {
+    if (!settingsModalOpen || !canUseNotes) return;
+    if (!notesFolderShown) getNotesFolder().then((dir) => dir && setNotesFolderShown(dir));
+    if (!defaultNotesFolder) getDefaultNotesFolder().then(setDefaultNotesFolder);
+  }, [settingsModalOpen]);
+
+  // Files sent by a second launch (e.g. "Open with DocAtlas" while it's already running).
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.onOpenFiles?.((paths) => openPathsRef.current(paths));
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
 
   /** Writes the active document to a file the user picks, then keeps editing that file. */
   const handleSaveAs = async () => {
@@ -1006,7 +1105,7 @@ const AppContent: React.FC = () => {
   const handleRenameNode = async (node: FileTreeNode, newName: string) => {
     if (workspace.kind === 'notes' && isElsewhereId(node.id)) {
       if (node.isFolder || !node.fullPath) return;
-      const oldPath = node.fullPath;
+      const oldPath = normalizeFsPath(node.fullPath);
       const newPath = `${oldPath.slice(0, oldPath.lastIndexOf('/'))}/${newName}`;
       try {
         await ProjectScannerService.renamePath(oldPath, newPath);
@@ -1401,6 +1500,17 @@ const AppContent: React.FC = () => {
       <AISettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
+        notes={
+          canUseNotes
+            ? {
+                folder: notesFolderShown,
+                defaultFolder: defaultNotesFolder,
+                onChoose: () => handleChangeNotesFolder(true),
+                onUseDefault: () => handleChangeNotesFolder(false),
+                onReveal: () => notesFolderShown && ProjectScannerService.revealInExplorer(notesFolderShown),
+              }
+            : undefined
+        }
       />
 
       {/* DocPassport Action Modal (from Editor TopNav Pill) */}

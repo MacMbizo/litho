@@ -1,13 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Check, X, RefreshCw, Cpu, Cloud, Key, AlertCircle } from 'lucide-react';
+import { Settings, Check, X, RefreshCw, Cpu, Cloud, Key, AlertCircle, NotebookPen, FolderOpen, RotateCcw } from 'lucide-react';
 import { AIService, AIConfig, AIProvider } from '../../services/aiService';
+
+/** Desktop only: where Ctrl+N notes are kept. Changes apply immediately (not on "Save Configuration"). */
+export interface NotesFolderSettings {
+  folder: string | null;
+  defaultFolder: string | null;
+  onChoose: () => void;
+  onUseDefault: () => void;
+  onReveal: () => void;
+}
 
 interface AISettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  notes?: NotesFolderSettings;
 }
 
-export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClose }) => {
+const sameFolder = (a: string | null, b: string | null) =>
+  Boolean(a && b) && a!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase() === b!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+
+export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClose, notes }) => {
   const [config, setConfig] = useState<AIConfig>(AIService.getConfig());
   const [ollamaStatus, setOllamaStatus] = useState<{ checked: boolean; ok: boolean; models: string[] }>({
     checked: false,
@@ -59,7 +72,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#2f2f2f] bg-[#242424]">
           <div className="flex items-center gap-2">
             <Settings className="w-4 h-4 text-neutral-300" />
-            <h2 className="text-sm font-semibold text-neutral-100">AI Intelligence Settings</h2>
+            <h2 className="text-sm font-semibold text-neutral-100">Settings</h2>
           </div>
           <button
             onClick={onClose}
@@ -70,7 +83,58 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-5 text-xs">
+        <div className="p-5 space-y-5 text-xs max-h-[70vh] overflow-y-auto">
+          {/* Notes folder */}
+          {notes && (
+            <div className="space-y-2">
+              <label className="font-semibold text-neutral-300 flex items-center gap-1.5">
+                <NotebookPen className="w-3.5 h-3.5 text-sky-400" />
+                Notes folder
+              </label>
+              <div className="p-3 rounded-lg bg-[#181818] border border-[#2e2e2e] space-y-2.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button
+                    type="button"
+                    onClick={notes.onReveal}
+                    disabled={!notes.folder}
+                    className="flex-1 min-w-0 text-left font-mono text-[11px] text-neutral-200 truncate hover:text-white disabled:text-neutral-500"
+                    title={notes.folder ? `${notes.folder} (show in File Explorer)` : undefined}
+                    data-testid="notes-folder-path"
+                  >
+                    {notes.folder || 'Loading…'}
+                  </button>
+                  {sameFolder(notes.folder, notes.defaultFolder) && (
+                    <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[#262626] text-neutral-400">Default</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-neutral-500 leading-relaxed">
+                  New notes (Ctrl+N) are saved here. Changing it doesn't move existing notes; they stay in the old folder.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={notes.onChoose}
+                    className="px-2.5 py-1.5 rounded-md bg-[#262626] hover:bg-[#303030] border border-[#363636] text-neutral-200 flex items-center gap-1.5 transition"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Change…</span>
+                  </button>
+                  {notes.defaultFolder && notes.folder && !sameFolder(notes.folder, notes.defaultFolder) && (
+                    <button
+                      type="button"
+                      onClick={notes.onUseDefault}
+                      className="px-2.5 py-1.5 rounded-md hover:bg-[#2a2a2a] text-neutral-400 hover:text-neutral-200 flex items-center gap-1.5 transition"
+                      title={notes.defaultFolder}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Use default</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Provider Selection */}
           <div className="space-y-2">
             <label className="font-semibold text-neutral-300 block">Active AI Provider</label>

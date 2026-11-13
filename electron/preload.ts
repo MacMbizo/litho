@@ -11,7 +11,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   movePathSafe: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:movePathSafe', oldPath, newPath),
   deletePath: (targetPath: string) => ipcRenderer.invoke('fs:deletePath', targetPath),
   revealInExplorer: (targetPath: string) => ipcRenderer.invoke('fs:revealInExplorer', targetPath),
-  getNotesFolder: () => ipcRenderer.invoke('notes:getFolder'),
+  getNotesFolder: (preferred?: string) => ipcRenderer.invoke('notes:getFolder', preferred),
+  getDefaultNotesFolder: () => ipcRenderer.invoke('notes:getDefaultFolder'),
+  takeLaunchFiles: () => ipcRenderer.invoke('app:takeLaunchFiles'),
+  onOpenFiles: (callback: (paths: string[]) => void) => {
+    const listener = (_: unknown, paths: string[]) => callback(paths);
+    ipcRenderer.on('app:openFiles', listener);
+    return () => {
+      ipcRenderer.removeListener('app:openFiles', listener);
+    };
+  },
   openMarkdownFiles: () => ipcRenderer.invoke('dialog:openMarkdownFiles'),
   saveMarkdownFileAs: (defaultPath?: string) => ipcRenderer.invoke('dialog:saveMarkdownFile', defaultPath),
   fileInfo: (filePath: string) => ipcRenderer.invoke('fs:fileInfo', filePath),

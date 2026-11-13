@@ -8,8 +8,36 @@ import {
   newNoteFileName,
   relativeInside,
   samePath,
+  firstHeading,
+  safeFileStem,
+  noteNameFromHeading,
 } from '../src/services/notesWorkspace.ts';
 import type { ProjectWorkspace } from '../src/types/document.ts';
+
+test('firstHeading: first H1 outside code fences', () => {
+  assert.strictEqual(firstHeading('intro\n# Shopping list\n# Later'), 'Shopping list');
+  assert.strictEqual(firstHeading('```\n# not a heading\n```\n# Real one #'), 'Real one');
+  assert.strictEqual(firstHeading('## Only H2\ntext'), null);
+  assert.strictEqual(firstHeading('#hashtag'), null);
+});
+
+test('safeFileStem: valid on Windows', () => {
+  assert.strictEqual(safeFileStem('Q3: plan / budget?'), 'Q3 plan budget');
+  assert.strictEqual(safeFileStem('**Bold** idea...'), 'Bold idea');
+  assert.strictEqual(safeFileStem('CON'), 'CON note');
+  assert.strictEqual(safeFileStem('  ???  '), null);
+  assert.strictEqual(safeFileStem('x'.repeat(200))!.length, 80);
+});
+
+test('noteNameFromHeading: only auto-named notes, only when the heading says something new', () => {
+  const auto = 'Note 2026-11-13 0905.md';
+  assert.strictEqual(noteNameFromHeading(auto, '# Groceries for Sunday\n\n- [ ] milk'), 'Groceries for Sunday.md');
+  assert.strictEqual(noteNameFromHeading('Note 2026-11-13 0905 2.md', '# Ideas'), 'Ideas.md');
+  assert.strictEqual(noteNameFromHeading(auto, '# Note 2026-11-13 0905\n\ntext'), null, 'heading still the default');
+  assert.strictEqual(noteNameFromHeading(auto, 'no heading yet'), null);
+  assert.strictEqual(noteNameFromHeading('My plan.md', '# Something else'), null, 'user-chosen names are kept');
+  assert.strictEqual(noteNameFromHeading(auto, '# Note 2026-01-01 1200'), null, 'would look auto-named again');
+});
 
 test('relativeInside: matches Windows paths case- and slash-insensitively', () => {
   assert.strictEqual(relativeInside('C:\\Prj\\app\\docs\\a.md', 'c:/prj/app'), 'docs/a.md');

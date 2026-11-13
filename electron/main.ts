@@ -102,7 +102,43 @@ function createWindow() {
   });
 }
 
+/** Markdown files named in a command line, resolved against the directory it was run from. */
+function markdownArgs(argv: string[], cwd: string): string[] {
+  const found: string[] = [];
+  for (const arg of argv.slice(1)) {
+    if (!arg || arg.startsWith('-')) continue;
+    if (!MD_EXTENSIONS.has(path.extname(arg).toLowerCase())) continue;
+    const full = path.resolve(cwd, arg);
+    try {
+      if (fs.statSync(full).isFile()) found.push(full);
+    } catch {
+      // not a file: ignore
+    }
+  }
+  return found;
+}
+
+let pendingLaunchFiles: string[] = markdownArgs(process.argv, process.cwd());
+
+// One window: opening a .md while DocAtlas runs hands it to the open window instead of a second copy.
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv, workingDirectory) => {
+    const files = markdownArgs(argv, workingDirectory);
+    if (!mainWindow) {
+      pendingLaunchFiles.push(...files);
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    if (files.length > 0) mainWindow.webContents.send('app:openFiles', files);
+  });
+}
+
 app.whenReady().then(() => {
+  if (!hasInstanceLock) return;
   console.log('[Main]: Electron app is ready.');
   createWindow();
 
@@ -392,10 +428,30 @@ ipcMain.handle('fs:revealInExplorer', async (_, targetPath: string) => {
 });
 
 // Notes: the home for Markdown that isn't part of any project. Created on first use.
-ipcMain.handle('notes:getFolder', async () => {
-  const dir = path.join(app.getPath('documents'), 'DocAtlas Notes');
+const defaultNotesFolder = () => path.join(app.getPath('documents'), 'DocAtlas Notes');
+
+ipcMain.handle('notes:getDefaultFolder', async () => defaultNotesFolder());
+
+// Returns the chosen folder when it can be used (created if missing), otherwise the default.
+ipcMain.handle('notes:getFolder', async (_, preferred?: string) => {
+  if (preferred && path.isAbsolute(preferred)) {
+    try {
+      await fs.promises.mkdir(preferred, { recursive: true });
+      if ((await fs.promises.stat(preferred)).isDirectory()) return preferred;
+    } catch {
+      // unusable (removed drive, no permission): fall back to the default
+    }
+  }
+  const dir = defaultNotesFolder();
   await fs.promises.mkdir(dir, { recursive: true });
   return dir;
+});
+
+// Files handed to the app on its command line (or by "Open with"), queued until the UI asks for them.
+ipcMain.handle('app:takeLaunchFiles', async () => {
+  const files = pendingLaunchFiles;
+  pendingLaunchFiles = [];
+  return files;
 });
 
 const MARKDOWN_FILTERS = [
