@@ -6,6 +6,12 @@ import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
 
+// The app is now called Litho, but its saved data (portfolio snapshot, Notes settings, last workspace,
+// localStorage) lives in the folder Electron derived from the original package name. Pin it so renaming
+// the package or adding a productName for packaging can never silently start the app with empty state.
+// Must run before anything reads userData, including the single-instance lock below.
+app.setPath('userData', path.join(app.getPath('appData'), 'notion-markdown-studio'));
+
 let mainWindow: BrowserWindow | null = null;
 let activeWatcher: fs.FSWatcher | null = null;
 
@@ -58,7 +64,8 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     center: true,
-    title: 'Notion Markdown Studio & Agent OS',
+    title: 'Litho',
+    icon: path.join(__dirname, '../assets/brand/build', process.platform === 'win32' ? 'litho.ico' : 'litho-256.png'),
     backgroundColor: '#191919',
     show: true,
     webPreferences: {
