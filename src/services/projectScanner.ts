@@ -8,8 +8,19 @@ declare global {
       scanDirectory: (dirPath: string) => Promise<{
         rootPath: string;
         rootName: string;
-        files: Array<{ path: string; fullPath: string; name: string; content: string }>;
+        files: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }>;
         tree: any;
+        configFiles?: Record<string, string>;
+      }>;
+      scanPortfolioRoot: (dirPath: string) => Promise<{
+        rootPath: string;
+        projects: Array<{
+          rootPath: string;
+          rootName: string;
+          files: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }>;
+          tree: any;
+          configFiles?: Record<string, string>;
+        }>;
       }>;
       readFile: (filePath: string) => Promise<string>;
       writeFile: (filePath: string, content: string) => Promise<boolean>;
@@ -17,6 +28,7 @@ declare global {
       renamePath: (oldPath: string, newPath: string) => Promise<boolean>;
       deletePath: (targetPath: string) => Promise<boolean>;
       revealInExplorer: (targetPath: string) => Promise<boolean>;
+      fetchJson: (url: string) => Promise<any>;
       onFsChanged: (callback: (data: any) => void) => void;
     };
   }
@@ -82,6 +94,7 @@ export class ProjectScannerService {
         body: parsed.body,
         wordCount: parsed.wordCount,
         tasks: parsed.tasks,
+        lastModifiedMs: raw.lastModifiedMs,
         isDirty: false,
       };
     });
@@ -94,6 +107,7 @@ export class ProjectScannerService {
       isLocalFolder: true,
       tree: enrichedTree,
       files,
+      configFiles: result.configFiles || {},
     };
   }
 
@@ -119,6 +133,24 @@ export class ProjectScannerService {
       const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
       const rootName = dirHandle.name;
       const files: MarkdownFile[] = [];
+      const configFiles: Record<string, string> = {};
+      const TRACKED_CONFIGS = new Set([
+        'package.json',
+        'app.config.json',
+        'app.json',
+        'app.config.ts',
+        'app.config.js',
+        'eas.json',
+        'tsconfig.json',
+        'pyproject.toml',
+        'requirements.txt',
+        'Dockerfile',
+        'docker-compose.yml',
+        'vercel.json',
+        'wrangler.toml',
+        '.firebaserc',
+        'supabase/config.toml',
+      ]);
 
       const walkHandle = async (handle: any, currentPath: string): Promise<FileTreeNode> => {
         const isFolder = handle.kind === 'directory';
@@ -134,15 +166,38 @@ export class ProjectScannerService {
           const entryRelPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
 
           if (entry.kind === 'directory') {
-            if (IGNORED_FOLDERS.has(entry.name) || entry.name.startsWith('.')) {
+            if (
+              IGNORED_FOLDERS.has(entry.name) ||
+              (entry.name.startsWith('.') && entry.name !== '.github')
+            ) {
               continue;
+            }
+            if (entry.name === 'supabase' && !currentPath) {
+              // check supabase/config.toml
+              try {
+                const subCfg = await entry.getFileHandle('config.toml');
+                const f = await subCfg.getFile();
+                configFiles['supabase/config.toml'] = (await f.text()).slice(0, 64 * 1024);
+              } catch {
+                // ignore
+              }
             }
             const subTree = await walkHandle(entry, entryRelPath);
             if (subTree.children && subTree.children.length > 0) {
               folderNode.children!.push(subTree);
             }
           } else if (entry.kind === 'file') {
-            const ext = entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase();
+            if (TRACKED_CONFIGS.has(entryRelPath)) {
+              try {
+                const cfgObj = await entry.getFile();
+                configFiles[entryRelPath] = (await cfgObj.text()).slice(0, 128 * 1024);
+              } catch {
+                // ignore
+              }
+            }
+            const ext = entry.name.includes('.')
+              ? entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase()
+              : '';
             if (MD_EXTENSIONS.has(ext)) {
               const fileObj = await entry.getFile();
               const text = await fileObj.text();
@@ -157,6 +212,7 @@ export class ProjectScannerService {
                 body: parsed.body,
                 wordCount: parsed.wordCount,
                 tasks: parsed.tasks,
+                lastModifiedMs: fileObj.lastModified,
                 isDirty: false,
               };
 
@@ -186,6 +242,7 @@ export class ProjectScannerService {
         isLocalFolder: true,
         tree: enrichedTree,
         files,
+        configFiles,
       };
     } catch (err: any) {
       if (err.name === 'AbortError') return null;
@@ -295,5 +352,69 @@ export class ProjectScannerService {
     if (this.isElectron()) {
       window.electronAPI!.revealInExplorer(fullPath);
     }
+  }
+
+  /**
+   * Archive a markdown file safely into _archive/<relativePath>
+   */
+  static async archiveFile(workspace: ProjectWorkspace, file: MarkdownFile): Promise<string | null> {
+    const cleanRel = file.path.replace(/^_archive\//i, '');
+    const archiveRel = `_archive/${cleanRel}`;
+    if (this.isElectron() && file.fullPath) {
+      const targetFullPath = `${workspace.rootPath}/${archiveRel}`.replace(/\\/g, '/');
+      await window.electronAPI!.renamePath(file.fullPath, targetFullPath);
+      return archiveRel;
+    }
+    return archiveRel;
+  }
+
+  /**
+   * Pick a root directory containing multiple projects and scan all of them
+   */
+  static async openAndScanPortfolioRoot(): Promise<{ rootPath: string; projects: ProjectWorkspace[] } | null> {
+    if (this.isElectron()) {
+      const dirPath = await window.electronAPI!.openDirectory();
+      if (!dirPath) return null;
+      return this.scanPortfolioRoot(dirPath);
+    }
+    return null;
+  }
+
+  static async scanPortfolioRoot(rootDirPath: string): Promise<{ rootPath: string; projects: ProjectWorkspace[] }> {
+    if (!this.isElectron()) {
+      throw new Error('Multi-project root scanning requires the desktop Electron app.');
+    }
+    if (typeof window.electronAPI?.scanPortfolioRoot !== 'function') {
+      throw new Error('Please restart the Electron app (close window and run npm start) to enable Portfolio Scanning.');
+    }
+    const raw = await window.electronAPI.scanPortfolioRoot(rootDirPath);
+    const projects: ProjectWorkspace[] = raw.projects.map((p) => {
+      const parsedFiles: MarkdownFile[] = p.files.map((f) => {
+        const parsed = MarkdownService.parse(f.content, f.path);
+        return {
+          id: f.path,
+          path: f.path,
+          fullPath: f.fullPath,
+          name: f.name,
+          content: f.content,
+          frontmatter: parsed.frontmatter,
+          body: parsed.body,
+          wordCount: parsed.wordCount,
+          tasks: parsed.tasks,
+          lastModifiedMs: f.lastModifiedMs,
+          isDirty: false,
+        };
+      });
+      const enrichedTree = this.enrichTreeWithMetadata(p.tree, parsedFiles);
+      return {
+        name: p.rootName,
+        rootPath: p.rootPath,
+        isLocalFolder: true,
+        tree: enrichedTree,
+        files: parsedFiles,
+        configFiles: p.configFiles || {},
+      };
+    });
+    return { rootPath: raw.rootPath, projects };
   }
 }

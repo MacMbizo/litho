@@ -36,6 +36,7 @@ export interface MarkdownFile {
   isDirty?: boolean;
   wordCount: number;
   tasks: TaskItem[];
+  lastModifiedMs?: number;
 }
 
 export interface FileTreeNode {
@@ -56,7 +57,8 @@ export interface ProjectWorkspace {
   isLocalFolder: boolean;
   tree: FileTreeNode;
   files: MarkdownFile[];
+  configFiles?: Record<string, string>;
 }
 
-export type ViewMode = 'editor' | 'database' | 'tasks' | 'agent-hub' | 'graph' | 'project-overview';
+export type ViewMode = 'editor' | 'database' | 'tasks' | 'agent-hub' | 'graph' | 'project-overview' | 'portfolio';
 export type DatabaseViewType = 'table' | 'kanban' | 'gallery';

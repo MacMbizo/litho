@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { MarkdownFile, ViewMode, DocType, ProjectWorkspace, FileTreeNode } from './types/document';
 import { getSampleWorkspace } from './services/sampleVault';
 import { MarkdownService } from './services/markdown';
@@ -13,12 +13,18 @@ import { AgentPlayground } from './components/ai/AgentPlayground';
 import { GlobalTaskRolodex } from './components/tasks/GlobalTaskRolodex';
 import { KnowledgeGraph } from './components/graph/KnowledgeGraph';
 import { ProjectDashboard } from './components/project/ProjectDashboard';
+import { PortfolioView } from './components/project/PortfolioView';
+import { DocActionModal } from './components/project/DocActionModal';
+import { PortfolioProjectSummary } from './types/docAudit';
+import { inspectProjectStack } from './services/stackInspector';
+import { auditProjectDocumentation } from './services/docHealthAuditor';
 import { AISummaryModal } from './components/ai/AISummaryModal';
 import { AISettingsModal } from './components/ai/AISettingsModal';
 import { ProjectChatDrawer } from './components/ai/ProjectChatDrawer';
 import { ToastProvider, useToast } from './components/ui/Toast';
 
 const SAVED_WORKSPACE_PATH_KEY = 'notion_active_project_path';
+const SAVED_PORTFOLIO_ROOT_KEY = 'notion_portfolio_root_path';
 const SAVED_SIDEBAR_WIDTH_KEY = 'notion_sidebar_width';
 
 const AppContent: React.FC = () => {
@@ -43,6 +49,9 @@ const AppContent: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<ViewMode>('editor');
   const [isRawMarkdown, setIsRawMarkdown] = useState<boolean>(false);
+  const [portfolioRootPath, setPortfolioRootPath] = useState<string | null>(null);
+  const [portfolioProjects, setPortfolioProjects] = useState<PortfolioProjectSummary[]>([]);
+  const [scanningPortfolio, setScanningPortfolio] = useState<boolean>(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   // Sidebar layout state
@@ -57,6 +66,7 @@ const AppContent: React.FC = () => {
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [projectChatOpen, setProjectChatOpen] = useState(false);
+  const [editorPassportOpen, setEditorPassportOpen] = useState(false);
 
   const handleWidthChange = (w: number) => {
     setSidebarWidth(w);
@@ -84,10 +94,12 @@ const AppContent: React.FC = () => {
     }
   };
 
-  // Restore previous project path if in Electron on first boot
+  // Restore previous project path and portfolio root if in Electron on first boot
   useEffect(() => {
+    if (!ProjectScannerService.isElectron()) return;
+
     const savedPath = localStorage.getItem(SAVED_WORKSPACE_PATH_KEY);
-    if (savedPath && ProjectScannerService.isElectron()) {
+    if (savedPath) {
       ProjectScannerService.scanPath(savedPath).then((ws) => {
         if (ws) {
           setWorkspace(ws);
@@ -98,6 +110,24 @@ const AppContent: React.FC = () => {
           toast('Project Restored', ws.name, 'info');
         }
       });
+    }
+
+    const savedPortfolioRoot = localStorage.getItem(SAVED_PORTFOLIO_ROOT_KEY);
+    if (savedPortfolioRoot) {
+      setPortfolioRootPath(savedPortfolioRoot);
+      ProjectScannerService.scanPortfolioRoot(savedPortfolioRoot)
+        .then((result) => {
+          setPortfolioRootPath(result.rootPath);
+          setPortfolioProjects(
+            result.projects.map((proj) => ({
+              workspace: proj,
+              auditReport: auditProjectDocumentation(proj, inspectProjectStack(proj)),
+            }))
+          );
+        })
+        .catch(() => {
+          // Silently ignore if folder no longer exists
+        });
     }
   }, []);
 
@@ -139,6 +169,18 @@ const AppContent: React.FC = () => {
 
   const activeFile = files.find((f) => f.id === activeFileId) || null;
 
+  // Live DocPassport audit for active workspace & active file
+  const liveWorkspace = useMemo(() => ({ ...workspace, files }), [workspace, files]);
+  const activeStackProfile = useMemo(() => inspectProjectStack(liveWorkspace), [liveWorkspace]);
+  const activeAuditReport = useMemo(
+    () => auditProjectDocumentation(liveWorkspace, activeStackProfile),
+    [liveWorkspace, activeStackProfile]
+  );
+  const activeDocAudit = useMemo(
+    () => (activeFile ? activeAuditReport.inventory.find((i) => i.fileId === activeFile.id) || null : null),
+    [activeAuditReport.inventory, activeFile]
+  );
+
   // Task count calculation
   const totalTasks = files.reduce((acc, f) => acc + (f.tasks?.length || 0), 0);
   const pendingTasks = files.reduce(
@@ -172,6 +214,16 @@ const AppContent: React.FC = () => {
         setWorkspace(refreshed);
         setFiles(refreshed.files);
         setOpenFileIds((prev) => prev.filter((id) => refreshed.files.some((f) => f.id === id)));
+        setPortfolioProjects((prev) =>
+          prev.map((entry) =>
+            entry.workspace.rootPath === refreshed.rootPath
+              ? {
+                  workspace: refreshed,
+                  auditReport: auditProjectDocumentation(refreshed, inspectProjectStack(refreshed)),
+                }
+              : entry
+          )
+        );
         toast('Project Rescanned', `${refreshed.files.length} files found`, 'info');
       }
     } else {
@@ -225,6 +277,294 @@ const AppContent: React.FC = () => {
     setOpenFileIds((prev) => (prev.includes(newFile.id) ? prev : [...prev, newFile.id]));
     setViewMode('editor');
     toast('Document Created', fileName, 'success');
+  };
+
+  // Create or scaffold a specific document path with provided markdown content
+  const handleCreateDocWithContent = async (relativePath: string, content: string) => {
+    const normalizedPath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+    const lastSlash = normalizedPath.lastIndexOf('/');
+    const relDir = lastSlash !== -1 ? normalizedPath.slice(0, lastSlash) : '';
+    const fileName = lastSlash !== -1 ? normalizedPath.slice(lastSlash + 1) : normalizedPath;
+    const fullPath = workspace.isLocalFolder ? `${workspace.rootPath}/${normalizedPath}`.replace(/\\/g, '/') : undefined;
+
+    const parsed = MarkdownService.parse(content, normalizedPath);
+    const newFile: MarkdownFile = {
+      id: normalizedPath,
+      path: normalizedPath,
+      fullPath,
+      name: fileName,
+      content,
+      frontmatter: parsed.frontmatter,
+      body: parsed.body,
+      wordCount: parsed.wordCount,
+      tasks: parsed.tasks,
+      isDirty: false,
+      lastModifiedMs: Date.now(),
+    };
+
+    if (workspace.isLocalFolder && fullPath) {
+      const targetDir = relDir ? `${workspace.rootPath}/${relDir}` : workspace.rootPath;
+      await ProjectScannerService.createFile(targetDir, fileName, content);
+      await handleRefreshProject();
+    } else {
+      setFiles((prev) => {
+        const filtered = prev.filter((f) => f.id !== normalizedPath);
+        return [newFile, ...filtered];
+      });
+    }
+
+    setActiveFileId(newFile.id);
+    setOpenFileIds((prev) => (prev.includes(newFile.id) ? prev : [...prev, newFile.id]));
+    setViewMode('editor');
+    toast('Document Scaffolded', normalizedPath, 'success');
+  };
+
+  // Safe document actions from ProjectDashboard / DocActionModal
+  const handleArchiveFile = async (file: MarkdownFile) => {
+    const archiveRel = await ProjectScannerService.archiveFile(workspace, file);
+    if (!archiveRel) return;
+    setOpenFileIds((prev) => prev.filter((id) => id !== file.id));
+    if (workspace.isLocalFolder) {
+      await handleRefreshProject();
+    } else {
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === file.id ? { ...f, id: archiveRel, path: archiveRel } : f
+        )
+      );
+    }
+    toast('Archived Safely', `Moved to ${archiveRel}`, 'success');
+  };
+
+  const handleMarkDeprecated = async (file: MarkdownFile, supersededByPath?: string) => {
+    const updatedFrontmatter = {
+      ...file.frontmatter,
+      status: 'Archived' as const,
+      updated_at: new Date().toISOString().slice(0, 10),
+    };
+    const banner = supersededByPath
+      ? `> [!WARNING] **Deprecated:** Superseded by [${supersededByPath}](${supersededByPath}).\n\n`
+      : `> [!WARNING] **Deprecated:** This document is marked archived/deprecated.\n\n`;
+    const nextBody = file.body.includes('**Deprecated:**') ? file.body : `${banner}${file.body.trimStart()}`;
+    const fullMarkdown = MarkdownService.stringify(updatedFrontmatter, nextBody);
+    const parsed = MarkdownService.parse(fullMarkdown, file.path);
+    const updatedFile: MarkdownFile = {
+      ...file,
+      content: fullMarkdown,
+      frontmatter: updatedFrontmatter,
+      body: parsed.body,
+      wordCount: parsed.wordCount,
+      tasks: parsed.tasks,
+      isDirty: false,
+      lastModifiedMs: Date.now(),
+    };
+    if (workspace.isLocalFolder && file.fullPath) {
+      await ProjectScannerService.saveFileToDisk(updatedFile);
+      await handleRefreshProject();
+    } else {
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? updatedFile : f)));
+    }
+    toast('Marked Deprecated', `${file.path} preserved in-place`, 'info');
+  };
+
+  const handleRestoreActive = async (file: MarkdownFile) => {
+    const updatedFrontmatter = {
+      ...file.frontmatter,
+      status: 'Active' as const,
+      updated_at: new Date().toISOString().slice(0, 10),
+    };
+    const cleanedBody = file.body
+      .replace(/^>\s*\[!WARNING\]\s*\*\*Deprecated:\*\*[^\n]*\n+/im, '')
+      .trimStart();
+    const fullMarkdown = MarkdownService.stringify(updatedFrontmatter, cleanedBody);
+    const parsed = MarkdownService.parse(fullMarkdown, file.path);
+    const updatedFile: MarkdownFile = {
+      ...file,
+      content: fullMarkdown,
+      frontmatter: updatedFrontmatter,
+      body: parsed.body,
+      wordCount: parsed.wordCount,
+      tasks: parsed.tasks,
+      isDirty: false,
+      lastModifiedMs: Date.now(),
+    };
+    if (workspace.isLocalFolder && file.fullPath) {
+      await ProjectScannerService.saveFileToDisk(updatedFile);
+      await handleRefreshProject();
+    } else {
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? updatedFile : f)));
+    }
+    toast('Restored to Active', `${file.path} is now active`, 'success');
+  };
+
+  const handleAutoFixStale = async (file: MarkdownFile) => {
+    const stack = inspectProjectStack(workspace);
+    let nextBody = file.body;
+    if (stack.localPort) {
+      nextBody = nextBody.replace(/localhost:(\d{4,5})/g, `localhost:${stack.localPort}`);
+    }
+    if (stack.expoSdkVersion) {
+      const sdkMajor = parseInt(stack.expoSdkVersion, 10);
+      if (!isNaN(sdkMajor)) {
+        nextBody = nextBody.replace(/Expo\s+SDK\s*(\d{2})/gi, `Expo SDK ${sdkMajor}`);
+      }
+    }
+    const updatedFrontmatter = {
+      ...file.frontmatter,
+      status: file.frontmatter.status === 'Archived' ? ('Active' as const) : file.frontmatter.status,
+      updated_at: new Date().toISOString().slice(0, 10),
+    };
+    const fullMarkdown = MarkdownService.stringify(updatedFrontmatter, nextBody);
+    const parsed = MarkdownService.parse(fullMarkdown, file.path);
+    const updatedFile: MarkdownFile = {
+      ...file,
+      content: fullMarkdown,
+      frontmatter: updatedFrontmatter,
+      body: parsed.body,
+      wordCount: parsed.wordCount,
+      tasks: parsed.tasks,
+      isDirty: false,
+      lastModifiedMs: Date.now(),
+    };
+    if (workspace.isLocalFolder && file.fullPath) {
+      await ProjectScannerService.saveFileToDisk(updatedFile);
+      await handleRefreshProject();
+    } else {
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? updatedFile : f)));
+    }
+    toast('Drift Synced & Reviewed', `Updated ${file.path}`, 'success');
+  };
+
+  const handleLinkOrphanInReadme = async (file: MarkdownFile) => {
+    const readme = files.find((f) => f.name.toLowerCase() === 'readme.md');
+    const linkLine = `- [${file.frontmatter.title || file.name}](${file.path})`;
+    if (readme) {
+      if (readme.body.includes(file.path)) {
+        toast('Already Linked', `${file.path} is already linked in README.md`, 'info');
+        return;
+      }
+      const nextBody = readme.body.includes('## Documentation')
+        ? readme.body.replace(/## Documentation\s*\n/, `## Documentation\n\n${linkLine}\n`)
+        : `${readme.body.trimEnd()}\n\n## Documentation\n\n${linkLine}\n`;
+      const fullMarkdown = MarkdownService.stringify(readme.frontmatter, nextBody);
+      const parsed = MarkdownService.parse(fullMarkdown, readme.path);
+      const updatedReadme: MarkdownFile = {
+        ...readme,
+        content: fullMarkdown,
+        body: parsed.body,
+        wordCount: parsed.wordCount,
+        tasks: parsed.tasks,
+        isDirty: false,
+        lastModifiedMs: Date.now(),
+      };
+      if (workspace.isLocalFolder && readme.fullPath) {
+        await ProjectScannerService.saveFileToDisk(updatedReadme);
+        await handleRefreshProject();
+      } else {
+        setFiles((prev) => prev.map((f) => (f.id === readme.id ? updatedReadme : f)));
+      }
+      toast('Orphan Adopted', `Added link to ${file.path} in README.md`, 'success');
+    } else {
+      const content = `# ${workspace.name}\n\n## Documentation\n\n${linkLine}\n`;
+      await handleCreateDocWithContent('README.md', content);
+      toast('README Created & Linked', `Linked ${file.path} in new README.md`, 'success');
+    }
+  };
+
+  const handleMarkScopedDoc = async (file: MarkdownFile) => {
+    const updatedFrontmatter = {
+      ...file.frontmatter,
+      scope: 'module',
+      updated_at: new Date().toISOString().slice(0, 10),
+    };
+    const fullMarkdown = MarkdownService.stringify(updatedFrontmatter, file.body);
+    const parsed = MarkdownService.parse(fullMarkdown, file.path);
+    const updatedFile: MarkdownFile = {
+      ...file,
+      content: fullMarkdown,
+      frontmatter: updatedFrontmatter,
+      body: parsed.body,
+      wordCount: parsed.wordCount,
+      tasks: parsed.tasks,
+      isDirty: false,
+      lastModifiedMs: Date.now(),
+    };
+    if (workspace.isLocalFolder && file.fullPath) {
+      await ProjectScannerService.saveFileToDisk(updatedFile);
+      await handleRefreshProject();
+    } else {
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? updatedFile : f)));
+    }
+    toast('Marked as Module Doc', `${file.path} will be kept as a scoped document`, 'success');
+  };
+
+  const handleDeleteDoc = async (file: MarkdownFile) => {
+    await handleDeleteFile(file.id, file.fullPath);
+  };
+
+  const buildPortfolioSummaries = (projects: ProjectWorkspace[]): PortfolioProjectSummary[] =>
+    projects.map((proj) => {
+      const stack = inspectProjectStack(proj);
+      const auditReport = auditProjectDocumentation(proj, stack);
+      return { workspace: proj, auditReport };
+    });
+
+  const handleScanPortfolioRoot = async () => {
+    setScanningPortfolio(true);
+    try {
+      const result = await ProjectScannerService.openAndScanPortfolioRoot();
+      if (!result) return;
+      setPortfolioRootPath(result.rootPath);
+      localStorage.setItem(SAVED_PORTFOLIO_ROOT_KEY, result.rootPath);
+      setPortfolioProjects(buildPortfolioSummaries(result.projects));
+      setViewMode('portfolio');
+      toast('Portfolio Scanned', `Found ${result.projects.length} projects`, 'success');
+    } catch (err: any) {
+      toast('Scan Failed', err?.message || 'Could not scan portfolio root', 'error');
+    } finally {
+      setScanningPortfolio(false);
+    }
+  };
+
+  const handleScanPortfolioPath = async (targetPath: string) => {
+    setScanningPortfolio(true);
+    try {
+      const result = await ProjectScannerService.scanPortfolioRoot(targetPath);
+      setPortfolioRootPath(result.rootPath);
+      localStorage.setItem(SAVED_PORTFOLIO_ROOT_KEY, result.rootPath);
+      setPortfolioProjects(buildPortfolioSummaries(result.projects));
+      setViewMode('portfolio');
+      toast('Portfolio Scanned', `Found ${result.projects.length} projects`, 'success');
+    } catch (err: any) {
+      toast('Scan Failed', err?.message || 'Could not scan portfolio root', 'error');
+    } finally {
+      setScanningPortfolio(false);
+    }
+  };
+
+  const handleRefreshPortfolio = async () => {
+    if (!portfolioRootPath) return;
+    await handleScanPortfolioPath(portfolioRootPath);
+  };
+
+  const handleOpenPortfolioProject = (projWorkspace: ProjectWorkspace, targetFileId?: string) => {
+    setWorkspace(projWorkspace);
+    setFiles(projWorkspace.files);
+    const chosenId = targetFileId || projWorkspace.files[0]?.id || null;
+    setActiveFileId(chosenId);
+    setOpenFileIds((prev) => {
+      if (!chosenId) return [];
+      return prev.includes(chosenId) ? prev : [...prev.filter((id) => projWorkspace.files.some((f) => f.id === id)), chosenId];
+    });
+    if (projWorkspace.isLocalFolder) {
+      localStorage.setItem(SAVED_WORKSPACE_PATH_KEY, projWorkspace.rootPath);
+    }
+    if (targetFileId) {
+      setViewMode('editor');
+    } else {
+      setViewMode('project-overview');
+      toast('Opened Project', projWorkspace.name, 'success');
+    }
   };
 
   // Create new subfolder
@@ -340,6 +680,9 @@ const AppContent: React.FC = () => {
         files={files}
         tree={workspace.tree}
         project={workspace}
+        portfolioProjects={portfolioProjects}
+        portfolioRootPath={portfolioRootPath}
+        onSelectPortfolioProject={handleOpenPortfolioProject}
         activeFileId={activeFileId}
         onSelectFile={handleSelectFile}
         onNewFile={handleNewFile}
@@ -369,6 +712,11 @@ const AppContent: React.FC = () => {
         {/* Top Navbar */}
         <TopNav
           activeFile={activeFile}
+          projectName={workspace.name}
+          activeDocAudit={activeDocAudit}
+          onOpenDocPassport={() => setEditorPassportOpen(true)}
+          hasPortfolio={portfolioProjects.length > 0}
+          onBackToPortfolio={() => setViewMode('portfolio')}
           onOpenAIModal={() => setAiModalOpen(true)}
           onOpenAgentTester={() => setViewMode('agent-hub')}
           onOpenProjectChat={() => setProjectChatOpen(true)}
@@ -392,6 +740,19 @@ const AppContent: React.FC = () => {
 
         {/* View Switcher Container */}
         <div className="flex-1 overflow-hidden relative">
+          {viewMode === 'portfolio' && (
+            <PortfolioView
+              portfolioRootPath={portfolioRootPath}
+              currentWorkspaceRoot={workspace.isLocalFolder ? workspace.rootPath : null}
+              projects={portfolioProjects}
+              scanning={scanningPortfolio}
+              onScanPortfolioRoot={handleScanPortfolioRoot}
+              onScanCurrentWorkspaceRoot={() => handleScanPortfolioPath(workspace.rootPath)}
+              onRefreshPortfolio={handleRefreshPortfolio}
+              onOpenProject={handleOpenPortfolioProject}
+            />
+          )}
+
           {viewMode === 'project-overview' && (
             <ProjectDashboard
               project={workspace}
@@ -399,6 +760,15 @@ const AppContent: React.FC = () => {
               onSelectViewMode={setViewMode}
               onNewFile={() => handleNewFile('document')}
               onRefreshProject={handleRefreshProject}
+              onCreateDocWithContent={handleCreateDocWithContent}
+              onArchiveFile={handleArchiveFile}
+              onMarkDeprecated={handleMarkDeprecated}
+              onRestoreActive={handleRestoreActive}
+              onAutoFixStale={handleAutoFixStale}
+              onLinkOrphanInReadme={handleLinkOrphanInReadme}
+              onMarkScopedDoc={handleMarkScopedDoc}
+              onDeleteDoc={handleDeleteDoc}
+              onOpenPortfolio={() => setViewMode('portfolio')}
             />
           )}
 
@@ -506,6 +876,33 @@ const AppContent: React.FC = () => {
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
       />
+
+      {/* DocPassport Action Modal (from Editor TopNav Pill) */}
+      {editorPassportOpen && activeDocAudit && (
+        <DocActionModal
+          item={activeDocAudit}
+          canonicalItem={
+            activeDocAudit.duplicateOf
+              ? activeAuditReport.inventory.find((i) => i.path === activeDocAudit.duplicateOf)
+              : undefined
+          }
+          files={files}
+          stackProfile={activeStackProfile}
+          isLocalFolder={workspace.isLocalFolder}
+          onClose={() => setEditorPassportOpen(false)}
+          onOpenInEditor={handleSelectFile}
+          onRevealInExplorer={(f) => {
+            if (f.fullPath) ProjectScannerService.revealInExplorer(f.fullPath);
+          }}
+          onArchiveFile={handleArchiveFile}
+          onMarkDeprecated={handleMarkDeprecated}
+          onRestoreActive={handleRestoreActive}
+          onAutoFixStale={handleAutoFixStale}
+          onLinkOrphanInReadme={handleLinkOrphanInReadme}
+          onMarkScopedDoc={handleMarkScopedDoc}
+          onDeleteFile={handleDeleteDoc}
+        />
+      )}
     </div>
   );
 };

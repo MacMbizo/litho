@@ -24,15 +24,20 @@ import {
   MoreVertical,
   Edit3,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  FolderGit2
 } from 'lucide-react';
 import { MarkdownFile, ViewMode, DocType, FileTreeNode, ProjectWorkspace } from '../../types/document';
+import { PortfolioProjectSummary } from '../../types/docAudit';
 import { FileContextMenu, ContextMenuState } from './FileContextMenu';
 
 interface SidebarProps {
   files: MarkdownFile[];
   tree?: FileTreeNode | null;
   project?: ProjectWorkspace | null;
+  portfolioProjects?: PortfolioProjectSummary[];
+  portfolioRootPath?: string | null;
+  onSelectPortfolioProject?: (workspace: ProjectWorkspace, fileId?: string) => void;
   activeFileId: string | null;
   onSelectFile: (id: string) => void;
   onNewFile: (type: DocType, targetFolder?: string) => void;
@@ -58,6 +63,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   files,
   tree,
   project,
+  portfolioProjects,
+  portfolioRootPath,
+  onSelectPortfolioProject,
   activeFileId,
   onSelectFile,
   onNewFile,
@@ -79,6 +87,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
 }) => {
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const [treeTab, setTreeTab] = useState<'files' | 'portfolio'>('files');
+  const [showProjectSwitcher, setShowProjectSwitcher] = useState<boolean>(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const isResizingRef = React.useRef(false);
 
@@ -261,25 +272,88 @@ export const Sidebar: React.FC<SidebarProps> = ({
       style={{ width: `${width}px` }}
       className="relative h-screen bg-[#1e1e21] text-[#9b9b9b] flex flex-col border-r border-[#2c2c30] select-none text-sm font-sans shrink-0"
     >
-      {/* Workspace Header & Project Folder Button */}
-      <div className="p-3 border-b border-[#2c2c30] flex items-center justify-between">
-        <div 
-          onClick={() => onSelectViewMode('project-overview')}
-          className="flex items-center gap-2 cursor-pointer group truncate"
-          title="Click to view Project Health Dashboard"
+      {/* Workspace Header & Quick Switcher */}
+      <div className="relative p-3 border-b border-[#2c2c30] flex items-center justify-between">
+        <div
+          onClick={() => {
+            if (portfolioProjects && portfolioProjects.length > 0) {
+              setShowProjectSwitcher((prev) => !prev);
+            } else {
+              onSelectViewMode('project-overview');
+            }
+          }}
+          className="flex items-center gap-2 cursor-pointer group truncate flex-1 min-w-0"
+          title={
+            portfolioProjects && portfolioProjects.length > 0
+              ? 'Switch active project'
+              : 'Click to view Project Health Dashboard'
+          }
         >
           <div className="w-6 h-6 rounded bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-sm shrink-0">
             {project ? project.name[0].toUpperCase() : 'N'}
           </div>
-          <div className="truncate">
-            <div className="font-semibold text-neutral-200 text-xs truncate group-hover:text-white transition">
-              {project ? project.name : 'Markdown Studio'}
+          <div className="truncate flex-1">
+            <div className="font-semibold text-neutral-200 text-xs truncate group-hover:text-white transition flex items-center gap-1">
+              <span className="truncate">{project ? project.name : 'Markdown Studio'}</span>
+              {portfolioProjects && portfolioProjects.length > 0 && (
+                <ChevronDown className="w-3 h-3 text-neutral-500 shrink-0" />
+              )}
             </div>
             <div className="text-[10px] text-neutral-500 truncate">
-              {project?.isLocalFolder ? 'Local Project' : 'Sample Vault'}
+              {project?.isLocalFolder ? 'Local Workspace' : 'Sample Vault'}
             </div>
           </div>
         </div>
+
+        {showProjectSwitcher && portfolioProjects && portfolioProjects.length > 0 && (
+          <div
+            className="absolute left-2 right-2 top-full mt-1 bg-[#222226] border border-[#383840] rounded-lg shadow-2xl py-1.5 z-50 max-h-72 overflow-y-auto"
+            onMouseLeave={() => setShowProjectSwitcher(false)}
+          >
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+              Switch Active Project
+            </div>
+            {portfolioProjects.map((entry) => {
+              const proj = entry.workspace;
+              const isCurrent = project?.rootPath === proj.rootPath;
+              return (
+                <button
+                  key={proj.rootPath}
+                  onClick={() => {
+                    onSelectPortfolioProject?.(proj);
+                    setShowProjectSwitcher(false);
+                    setTreeTab('files');
+                  }}
+                  className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between gap-2 transition ${
+                    isCurrent
+                      ? 'bg-indigo-500/20 text-indigo-200 font-medium'
+                      : 'text-neutral-300 hover:bg-[#2c2c32]'
+                  }`}
+                >
+                  <span className="truncate flex items-center gap-1.5">
+                    <Folder className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    <span className="truncate">{proj.name}</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-neutral-400 shrink-0">
+                    {entry.auditReport.grade} • {proj.files.length}
+                  </span>
+                </button>
+              );
+            })}
+            <div className="border-t border-[#323238] mt-1 pt-1">
+              <button
+                onClick={() => {
+                  onSelectViewMode('portfolio');
+                  setShowProjectSwitcher(false);
+                }}
+                className="w-full text-left px-3 py-1.5 text-xs text-indigo-300 hover:bg-[#2c2c32] flex items-center gap-1.5"
+              >
+                <FolderGit2 className="w-3.5 h-3.5" />
+                <span>All Projects Portfolio</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-1">
           <button
@@ -322,6 +396,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Primary Navigation Views */}
       <div className="px-2 pt-3 pb-1 space-y-0.5">
+        <button
+          onClick={() => onSelectViewMode('portfolio')}
+          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
+            viewMode === 'portfolio' ? 'bg-[#2c2c2c] text-neutral-100' : 'hover:bg-[#262626] text-neutral-400 hover:text-neutral-200'
+          }`}
+        >
+          <span className="flex items-center gap-2.5">
+            <FolderGit2 className="w-4 h-4 text-indigo-400" />
+            <span>Projects Portfolio</span>
+          </span>
+          {portfolioProjects && portfolioProjects.length > 0 && (
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-indigo-500/20 text-indigo-300 font-semibold">
+              {portfolioProjects.length}
+            </span>
+          )}
+        </button>
+
+        <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-600 truncate">
+          Workspace: {project?.name || 'Vault'}
+        </div>
+
         <button
           onClick={() => onSelectViewMode('project-overview')}
           className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
@@ -390,48 +485,169 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      {/* Project Hierarchy Header */}
-      <div className="px-3 pt-3 pb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
-        <span>Files & Structure</span>
-        <div className="relative group">
-          <button 
-            className="p-1 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-neutral-200 transition"
-            title="Create New Item"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-          <div className="absolute right-0 top-full mt-1 w-36 bg-[#252525] border border-[#383838] rounded-md shadow-xl py-1 hidden group-hover:block z-50">
+      {/* Adaptive Explorer Header: Segmented Active Files vs Portfolio Projects */}
+      <div className="px-3 pt-3 pb-1.5 border-t border-[#2c2c30] mt-1 space-y-2">
+        {portfolioProjects && portfolioProjects.length > 0 ? (
+          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[#161618] border border-[#2c2c30]">
             <button
-              onClick={() => onNewFile('document')}
-              className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
+              onClick={() => setTreeTab('files')}
+              className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition truncate ${
+                treeTab === 'files'
+                  ? 'bg-[#2a2a2f] text-neutral-100 shadow-sm'
+                  : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+              title={`Files in ${project?.name || 'active workspace'}`}
             >
-              <FileText className="w-3.5 h-3.5 text-blue-400" /> Page
+              Active Files
             </button>
             <button
-              onClick={() => onNewFile('project')}
-              className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
+              onClick={() => setTreeTab('portfolio')}
+              className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition truncate ${
+                treeTab === 'portfolio'
+                  ? 'bg-indigo-500/20 text-indigo-200 shadow-sm'
+                  : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+              title={portfolioRootPath || 'All scanned portfolio projects'}
             >
-              <Layers className="w-3.5 h-3.5 text-sky-400" /> Project
-            </button>
-            <button
-              onClick={() => onNewFile('agent')}
-              className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
-            >
-              <Bot className="w-3.5 h-3.5 text-purple-400" /> Agent
-            </button>
-            <button
-              onClick={() => onNewFile('skill')}
-              className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
-            >
-              <Wrench className="w-3.5 h-3.5 text-emerald-400" /> Skill
+              Portfolio ({portfolioProjects.length})
             </button>
           </div>
-        </div>
+        ) : null}
+
+        {(!portfolioProjects || portfolioProjects.length === 0 || treeTab === 'files') && (
+          <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+            <span className="truncate">{project ? `${project.name} Files` : 'Files & Structure'}</span>
+            <div className="relative group shrink-0">
+              <button 
+                className="p-1 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-neutral-200 transition"
+                title="Create New Item"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+              <div className="absolute right-0 top-full mt-1 w-36 bg-[#252525] border border-[#383838] rounded-md shadow-xl py-1 hidden group-hover:block z-50">
+                <button
+                  onClick={() => onNewFile('document')}
+                  className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
+                >
+                  <FileText className="w-3.5 h-3.5 text-blue-400" /> Page
+                </button>
+                <button
+                  onClick={() => onNewFile('project')}
+                  className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
+                >
+                  <Layers className="w-3.5 h-3.5 text-sky-400" /> Project
+                </button>
+                <button
+                  onClick={() => onNewFile('agent')}
+                  className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
+                >
+                  <Bot className="w-3.5 h-3.5 text-purple-400" /> Agent
+                </button>
+                <button
+                  onClick={() => onNewFile('skill')}
+                  className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#303030] flex items-center gap-2"
+                >
+                  <Wrench className="w-3.5 h-3.5 text-emerald-400" /> Skill
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Recursive Project Tree */}
+      {/* Tree Content Area */}
       <div className="flex-1 overflow-y-auto px-2 space-y-0.5 pb-4">
-        {tree && tree.children && tree.children.length > 0 ? (
+        {portfolioProjects && portfolioProjects.length > 0 && treeTab === 'portfolio' ? (
+          portfolioProjects.map((entry) => {
+            const proj = entry.workspace;
+            const isCurrentProject = project?.rootPath === proj.rootPath;
+            const isExpanded = expandedProjects[proj.rootPath] ?? isCurrentProject;
+            const grade = entry.auditReport.grade;
+            const gradeClass =
+              grade === 'A'
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                : grade === 'B'
+                  ? 'bg-sky-500/20 text-sky-300 border-sky-500/30'
+                  : grade === 'C'
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                    : 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+
+            return (
+              <div key={proj.rootPath} className="select-none">
+                <div
+                  onClick={() => {
+                    setExpandedProjects((prev) => ({
+                      ...prev,
+                      [proj.rootPath]: !isExpanded,
+                    }));
+                    onSelectPortfolioProject?.(proj);
+                  }}
+                  className={`group flex items-center justify-between py-1 px-2 rounded text-xs cursor-pointer transition ${
+                    isCurrentProject
+                      ? 'bg-indigo-500/15 text-indigo-200 font-medium border border-indigo-500/30'
+                      : 'text-neutral-300 hover:bg-[#262626] hover:text-neutral-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 truncate">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedProjects((prev) => ({
+                          ...prev,
+                          [proj.rootPath]: !isExpanded,
+                        }));
+                      }}
+                      className="p-0.5 hover:text-white"
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="w-3 h-3 text-neutral-500" />
+                      ) : (
+                        <ChevronRight className="w-3 h-3 text-neutral-500" />
+                      )}
+                    </button>
+                    <Folder className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    <span className="truncate">{proj.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[10px] text-neutral-500 font-mono">
+                      {proj.files.length}
+                    </span>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${gradeClass}`}
+                    >
+                      {grade}
+                    </span>
+                  </div>
+                </div>
+
+                {isExpanded && proj.files.length > 0 && (
+                  <div className="pl-5 pr-1 py-0.5 space-y-0.5 border-l border-[#2c2c30] ml-3 my-0.5">
+                    {proj.files.map((f) => {
+                      const isSelectedFile = isCurrentProject && activeFileId === f.id;
+                      return (
+                        <div
+                          key={f.id}
+                          onClick={() => onSelectPortfolioProject?.(proj, f.id)}
+                          className={`flex items-center justify-between py-1 px-2 rounded text-[11px] cursor-pointer transition ${
+                            isSelectedFile
+                              ? 'bg-[#2f2f2f] text-white font-medium'
+                              : 'text-neutral-400 hover:bg-[#262626] hover:text-neutral-200'
+                          }`}
+                          title={f.path}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            {getDocIcon(f.frontmatter?.type)}
+                            <span className="truncate">{f.path}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        ) : tree && tree.children && tree.children.length > 0 ? (
           tree.children.map((child) => renderTreeNode(child, 0))
         ) : (
           <div className="py-8 text-center text-xs text-neutral-500">

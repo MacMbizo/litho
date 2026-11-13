@@ -18,12 +18,24 @@ import {
   Check,
   PanelLeftOpen,
   Folder,
-  MessageSquare
+  MessageSquare,
+  ArrowLeft,
+  ShieldCheck,
+  AlertTriangle,
+  Copy,
+  CheckCircle2,
+  Archive,
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
+import { DocInventoryItem, DocTaxonomyStatus } from '../../types/docAudit';
 
 interface TopNavProps {
   activeFile: MarkdownFile | null;
+  projectName?: string;
+  activeDocAudit?: DocInventoryItem | null;
+  onOpenDocPassport?: () => void;
+  hasPortfolio?: boolean;
+  onBackToPortfolio?: () => void;
   onOpenAIModal: () => void;
   onOpenAgentTester?: () => void;
   onOpenProjectChat?: () => void;
@@ -35,8 +47,23 @@ interface TopNavProps {
   onOpenProjectOverview?: () => void;
 }
 
+const PASSPORT_STYLE: Record<DocTaxonomyStatus, { label: string; cls: string; icon: React.ReactNode }> = {
+  canonical: { label: 'Canonical', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/30', icon: <ShieldCheck className="w-3 h-3" /> },
+  healthy: { label: 'Healthy', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', icon: <CheckCircle2 className="w-3 h-3" /> },
+  stale: { label: 'Stale', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30', icon: <Clock className="w-3 h-3" /> },
+  duplicate: { label: 'Duplicate', cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30', icon: <Copy className="w-3 h-3" /> },
+  deprecated: { label: 'Deprecated', cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30', icon: <Archive className="w-3 h-3" /> },
+  orphan: { label: 'Orphan', cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30', icon: <AlertTriangle className="w-3 h-3" /> },
+  'agent-system': { label: 'Agent / Skill', cls: 'bg-purple-500/15 text-purple-300 border-purple-500/30', icon: <Bot className="w-3 h-3" /> },
+};
+
 export const TopNav: React.FC<TopNavProps> = ({
   activeFile,
+  projectName,
+  activeDocAudit,
+  onOpenDocPassport,
+  hasPortfolio,
+  onBackToPortfolio,
   onOpenAIModal,
   onOpenAgentTester,
   onOpenProjectChat,
@@ -145,6 +172,17 @@ export const TopNav: React.FC<TopNavProps> = ({
           </button>
         )}
 
+        {hasPortfolio && onBackToPortfolio && (
+          <button
+            onClick={onBackToPortfolio}
+            className="flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-[11px] font-medium transition shrink-0"
+            title="Return to Projects Portfolio"
+          >
+            <ArrowLeft className="w-3 h-3" />
+            <span>Portfolio</span>
+          </button>
+        )}
+
         <div className="flex items-center gap-1.5 text-neutral-400 text-xs truncate">
           <span 
             onClick={onOpenProjectOverview}
@@ -152,12 +190,32 @@ export const TopNav: React.FC<TopNavProps> = ({
             title="Go to Project Overview"
           >
             <Folder className="w-3 h-3 text-neutral-500" />
-            <span>{activeFile.path.split('/')[0]}</span>
+            <span>{projectName || activeFile.path.split('/')[0]}</span>
           </span>
           <span className="text-neutral-600">/</span>
           <span className="font-semibold text-neutral-200 truncate">{activeFile.frontmatter.title || activeFile.name}</span>
         </div>
         {getTypeBadge()}
+        {activeDocAudit && (
+          <button
+            onClick={onOpenDocPassport}
+            className={`px-2 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1 transition hover:brightness-110 shrink-0 ${
+              PASSPORT_STYLE[activeDocAudit.status].cls
+            }`}
+            title={
+              activeDocAudit.issues.length > 0
+                ? `DocPassport: ${activeDocAudit.issues[0]} (Click for actions)`
+                : `DocPassport: ${activeDocAudit.isScopedModuleDoc ? 'Scoped Module Doc' : PASSPORT_STYLE[activeDocAudit.status].label} (Click for details)`
+            }
+          >
+            {PASSPORT_STYLE[activeDocAudit.status].icon}
+            <span>
+              {activeDocAudit.isScopedModuleDoc
+                ? 'Module Doc'
+                : PASSPORT_STYLE[activeDocAudit.status].label}
+            </span>
+          </button>
+        )}
         {activeFile.isDirty && (
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="Unsaved changes" />
         )}

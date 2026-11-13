@@ -28,6 +28,41 @@ const IGNORED_DIRS = new Set([
 
 const MD_EXTENSIONS = new Set(['.md', '.markdown', '.mdx']);
 
+const STACK_CONFIG_FILES = [
+  'package.json',
+  'app.config.json',
+  'app.json',
+  'app.config.ts',
+  'app.config.js',
+  'eas.json',
+  'tsconfig.json',
+  'pyproject.toml',
+  'requirements.txt',
+  'Dockerfile',
+  'docker-compose.yml',
+  'docker-compose.yaml',
+  'vercel.json',
+  'wrangler.toml',
+  '.firebaserc',
+  'supabase/config.toml',
+];
+
+async function readStackConfigFiles(rootDir: string): Promise<Record<string, string>> {
+  const configs: Record<string, string> = {};
+  for (const rel of STACK_CONFIG_FILES) {
+    const full = path.join(rootDir, rel);
+    try {
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+        const content = await fs.promises.readFile(full, 'utf-8');
+        configs[rel] = content.slice(0, 128 * 1024);
+      }
+    } catch {
+      // ignore unreadable config files
+    }
+  }
+  return configs;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -98,7 +133,10 @@ app.on('window-all-closed', () => {
 async function scanDirectoryRecursive(
   currentDir: string,
   rootDir: string
-): Promise<{ files: Array<{ path: string; fullPath: string; name: string; content: string }>; tree: any }> {
+): Promise<{
+  files: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }>;
+  tree: any;
+}> {
   const dirName = path.basename(currentDir);
   const relativePath = path.relative(rootDir, currentDir).replace(/\\/g, '/');
 
@@ -111,7 +149,7 @@ async function scanDirectoryRecursive(
     children: [],
   };
 
-  const filesList: Array<{ path: string; fullPath: string; name: string; content: string }> = [];
+  const filesList: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }> = [];
 
   try {
     const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
@@ -142,8 +180,11 @@ async function scanDirectoryRecursive(
         if (MD_EXTENSIONS.has(ext)) {
           const fileRelPath = path.relative(rootDir, entryFullPath).replace(/\\/g, '/');
           let content = '';
+          let lastModifiedMs: number | undefined;
           try {
             content = await fs.promises.readFile(entryFullPath, 'utf-8');
+            const st = await fs.promises.stat(entryFullPath);
+            lastModifiedMs = st.mtimeMs;
           } catch (e) {
             console.warn(`Failed to read file ${entryFullPath}:`, e);
           }
@@ -162,6 +203,7 @@ async function scanDirectoryRecursive(
             fullPath: entryFullPath,
             name: entry.name,
             content,
+            lastModifiedMs,
           });
         }
       }
@@ -184,7 +226,10 @@ ipcMain.handle('dialog:openDirectory', async () => {
 ipcMain.handle('fs:scanDirectory', async (_, dirPath: string) => {
   try {
     const rootName = path.basename(dirPath);
-    const { files, tree } = await scanDirectoryRecursive(dirPath, dirPath);
+    const [{ files, tree }, configFiles] = await Promise.all([
+      scanDirectoryRecursive(dirPath, dirPath),
+      readStackConfigFiles(dirPath),
+    ]);
 
     // Setup live file watcher for external changes (with debounce)
     if (activeWatcher) {
@@ -209,9 +254,69 @@ ipcMain.handle('fs:scanDirectory', async (_, dirPath: string) => {
       console.warn('File watcher setup skipped or unsupported:', watchErr);
     }
 
-    return { rootPath: dirPath, rootName, files, tree };
+    return { rootPath: dirPath, rootName, files, tree, configFiles };
   } catch (err: any) {
     throw new Error(`Failed to scan directory: ${err.message}`);
+  }
+});
+
+ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
+  try {
+    const entries = await fs.promises.readdir(rootDir, { withFileTypes: true });
+    const projects: Array<{
+      rootPath: string;
+      rootName: string;
+      files: any[];
+      tree: any;
+      configFiles: Record<string, string>;
+    }> = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+
+      const projDir = path.join(rootDir, entry.name);
+      const [{ files, tree }, configFiles] = await Promise.all([
+        scanDirectoryRecursive(projDir, projDir),
+        readStackConfigFiles(projDir),
+      ]);
+
+      let hasGit = false;
+      try {
+        await fs.promises.access(path.join(projDir, '.git'));
+        hasGit = true;
+      } catch {
+        hasGit = false;
+      }
+
+      if (files.length > 0 || Object.keys(configFiles).length > 0 || hasGit) {
+        projects.push({
+          rootPath: projDir,
+          rootName: entry.name,
+          files,
+          tree,
+          configFiles,
+        });
+      }
+    }
+
+    projects.sort((a, b) => a.rootName.localeCompare(b.rootName));
+    return { rootPath: rootDir, projects };
+  } catch (err: any) {
+    throw new Error(`Failed to scan portfolio root: ${err.message}`);
+  }
+});
+
+ipcMain.handle('net:fetchJson', async (_, url: string) => {
+  try {
+    if (!url.startsWith('https://registry.npmjs.org/') && !url.startsWith('https://pypi.org/pypi/')) {
+      throw new Error('Blocked URL');
+    }
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
 });
 
@@ -244,6 +349,7 @@ ipcMain.handle('fs:createFolder', async (_, folderPath: string) => {
 
 ipcMain.handle('fs:renamePath', async (_, oldPath: string, newPath: string) => {
   try {
+    await fs.promises.mkdir(path.dirname(newPath), { recursive: true });
     await fs.promises.rename(oldPath, newPath);
     return true;
   } catch (err: any) {
