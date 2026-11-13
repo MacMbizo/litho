@@ -1261,7 +1261,10 @@ const AppContent: React.FC = () => {
     [workspace, files]
   );
 
-  const currentWorkspaceParent = workspace.isLocalFolder ? parentFolderOf(workspace.rootPath) : null;
+  // Offer "scan the folder holding this project" only for real projects: the Notes folder's parent is
+  // Documents, which is not a folder of projects.
+  const currentWorkspaceParent =
+    workspace.isLocalFolder && workspace.kind !== 'notes' ? parentFolderOf(workspace.rootPath) : null;
 
   return (
     <div className={`flex h-screen w-screen bg-[#161618] text-neutral-200 overflow-hidden font-sans ${theme}`}>

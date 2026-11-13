@@ -28,6 +28,7 @@ import {
 import type { FreshnessIssue, PortfolioProjectSummary, StackFreshnessReport } from '../../types/docAudit';
 import type { ProjectWorkspace } from '../../types/document';
 import { DocPassportBadge, GRADE_CLASS } from './docPassport';
+import { DocAtlasMark } from '../brand/BrandMarks';
 import { assessStackFreshness, issueWeight } from '../../services/stackFreshness';
 import { FreshnessBadge, StackFreshnessPanel, timeAgo } from './StackFreshnessPanel';
 import { parseSemverMajor } from '../../services/stackInspector';
@@ -282,9 +283,13 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
       <div className="h-full overflow-y-auto bg-[#191919] text-neutral-100">
         <div className="max-w-3xl mx-auto px-6 py-16">
           <div className="rounded-2xl border border-[#2d2d2d] bg-gradient-to-b from-[#202020] to-[#1a1a1a] p-10 text-center space-y-6">
-            <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center justify-center mx-auto">
-              {isDesktop ? <Radar className={`w-7 h-7 ${busy ? 'animate-spin' : ''}`} /> : <Monitor className="w-7 h-7" />}
-            </div>
+            {isDesktop && !busy ? (
+              <DocAtlasMark className="w-14 h-14 mx-auto drop-shadow" />
+            ) : (
+              <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center justify-center mx-auto">
+                {isDesktop ? <Radar className="w-7 h-7 animate-spin" /> : <Monitor className="w-7 h-7" />}
+              </div>
+            )}
             <div className="space-y-2">
               <h1 className="text-xl font-bold text-white">
                 {!isDesktop ? 'DocAtlas runs in the desktop app' : busy ? 'Scanning your projects…' : 'See every project at a glance'}
@@ -435,9 +440,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
         {/* Header */}
         <div className="rounded-2xl border border-[#2d2d2d] bg-[#1e1e1e] p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3.5 min-w-0">
-            <div className="w-11 h-11 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center justify-center shrink-0">
-              <Radar className="w-6 h-6" />
-            </div>
+            <DocAtlasMark className="w-11 h-11 drop-shadow" />
             <div className="min-w-0 space-y-1.5">
               <h1 className="text-lg font-bold text-white leading-tight">DocAtlas</h1>
               <div className="flex flex-wrap items-center gap-1.5">

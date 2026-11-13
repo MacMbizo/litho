@@ -58,7 +58,7 @@ export const DatabaseHub: React.FC<DatabaseHubProps> = ({
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-neutral-100 tracking-tight">
-              Notion Database Hub
+              Database Hub
             </h1>
             <p className="text-xs text-neutral-400 mt-0.5">
               Multi-view reactive index of your markdown files, agents, skills, and projects.

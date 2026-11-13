@@ -874,7 +874,7 @@ export const NotionEditor: React.FC<NotionEditorProps> = ({
             <div className="relative rounded-2xl bg-[#1d1d20]/70 border border-[#2c2c32] p-8 shadow-sm">
               <div className="mb-4 flex items-center justify-between text-[11px] text-neutral-500 pb-2 border-b border-[#28282c]">
                 <div className="flex items-center gap-3">
-                  <span className="font-medium text-neutral-400">In-Place Notion Canvas</span>
+                  <span className="font-medium text-neutral-400">In-place canvas</span>
                   {extractedWikiLinks.length > 0 && (
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-neutral-600">•</span>

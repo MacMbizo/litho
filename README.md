@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/brand/litho.svg" width="96" height="96" alt="Litho logo: a Markdown # printed in cyan and magenta" />
+
 # Litho
 
 **A local-first Markdown studio, with DocAtlas built in for keeping every project's documentation and tech stack healthy.**
@@ -158,13 +160,13 @@ docs/superpowers/    Design specs and implementation plans
 | Browser dev server (sample vault) | `npm run dev` |
 | Unit tests | `npm test` |
 | Type-check | `npx tsc --noEmit -p .` |
+| Re-render app icons from `assets/brand/*.svg` | `npx electron scripts/render-icons.cjs` |
 
 Doc-health and stack heuristics are calibrated against real projects, not only fixtures. If you change a rule, run it against a real folder of projects before trusting the result.
 
 ## Roadmap
 
 - [ ] Windows installer with "Open with Litho" for `.md` files
-- [ ] Litho and DocAtlas icons throughout the app ([design](docs/superpowers/specs/2026-11-13-litho-icons-design.md))
 - [ ] Weekly background check with a desktop notification when a new Expo SDK ships or a runtime reaches end-of-life
 - [ ] "Save upgrade plan" to every at-risk project at once
 - [ ] Opt-in tracking of all dependencies, not just the main frameworks

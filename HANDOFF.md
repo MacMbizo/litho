@@ -1,6 +1,26 @@
-# Handoff: Notion Markdown Studio / DocAtlas
+# Handoff: Litho (Markdown studio) / DocAtlas
 
-_Last updated 2026-11-13. Branch `main`, pushed to https://github.com/MacMbizo/litho._
+_Last updated 2026-11-14. Branch `main`, pushed to https://github.com/MacMbizo/litho. Feature branches are merged into `main`._
+
+## Name and brand (2026-11-14)
+
+- **Names:**
+  - The app is **Litho**: one app. DocAtlas is its project-checking section.
+  - "Notion" is gone from user-facing labels. Code identifiers like `NotionEditor` are unchanged.
+- **Approved artwork (owner, direction "B2 overprint"):**
+  - **Litho:** a Markdown `#` printed in cyan `#00AEEF` and magenta `#EC008C` (multiply) on paper `#FAF7F0`.
+  - **DocAtlas:** a folded map with a magenta route.
+  - Design: `docs/superpowers/specs/2026-11-13-litho-icons-design.md`.
+- **Files:**
+  - Sources: `assets/brand/litho.svg`, `litho-small.svg` (used for 16 to 32 px) and `docatlas.svg`.
+  - In-app marks: `src/components/brand/BrandMarks.tsx` (`LithoMark`, `DocAtlasMark`, inline via Vite `?raw`).
+- **Generated (committed):**
+  - `assets/brand/build/litho-*.png` and `litho.ico`.
+  - `public/favicon.svg` and `public/favicon-32.png`.
+  - Re-render after editing the SVGs with `npx electron scripts/render-icons.cjs`. `tests/brand.test.ts` checks the ICO, the sizes, and that the overprint overlap renders dark.
+- **userData is pinned** to `%APPDATA%\notion-markdown-studio` in `electron/main.ts`.
+  - **Keep it.** Without it, a package rename or a `productName` change makes the app start empty: no portfolio, notes settings or last workspace.
+  - If packaging later, keep the pin. Don't move the data.
 
 ## What this is
 
@@ -17,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (41) | `npm test` |
+| Unit tests (44) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |

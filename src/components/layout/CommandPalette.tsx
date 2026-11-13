@@ -49,7 +49,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   ].filter(Boolean) as Array<{ id: string; label: string; icon: React.ReactNode; action: () => void }>;
   const actions = [
     ...noteActions,
-    { id: 'db', label: 'Go to Notion Database Hub', icon: <Layers className="w-4 h-4 text-amber-400" />, action: () => onSelectViewMode('database') },
+    { id: 'db', label: 'Go to Database Hub', icon: <Layers className="w-4 h-4 text-amber-400" />, action: () => onSelectViewMode('database') },
     { id: 'agent-hub', label: 'Go to Agents & Skills Testbed', icon: <Bot className="w-4 h-4 text-purple-400" />, action: () => onSelectViewMode('agent-hub') },
     { id: 'tasks', label: 'Go to Global Tasks Rolodex', icon: <CheckSquare className="w-4 h-4 text-emerald-400" />, action: () => onSelectViewMode('tasks') },
     { id: 'graph', label: 'Go to Knowledge Graph View', icon: <Share2 className="w-4 h-4 text-violet-400" />, action: () => onSelectViewMode('graph') },

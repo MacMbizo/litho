@@ -33,6 +33,7 @@ import { MarkdownFile, ViewMode, DocType, FileTreeNode, ProjectWorkspace } from 
 import { PortfolioProjectSummary, ProjectDocAuditReport, DocInventoryItem } from '../../types/docAudit';
 import { STATUS_META, passportLabel } from '../project/docPassport';
 import { FileContextMenu, ContextMenuState } from './FileContextMenu';
+import { DocAtlasMark } from '../brand/BrandMarks';
 
 interface SidebarProps {
   files: MarkdownFile[];
@@ -325,7 +326,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div className="truncate flex-1">
             <div className="font-semibold text-neutral-200 text-xs truncate group-hover:text-white transition flex items-center gap-1">
-              <span className="truncate">{project ? project.name : 'Markdown Studio'}</span>
+              <span className="truncate">{project ? project.name : 'Litho'}</span>
               {portfolioProjects && portfolioProjects.length > 0 && (
                 <ChevronDown className="w-3 h-3 text-neutral-500 shrink-0" />
               )}
@@ -474,7 +475,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }`}
         >
           <span className="flex items-center gap-2.5">
-            <FolderGit2 className="w-4 h-4 text-indigo-400" />
+            <DocAtlasMark className="w-4 h-4" />
             <span>Projects Portfolio</span>
           </span>
           {portfolioProjects && portfolioProjects.length > 0 && (
@@ -544,7 +545,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }`}
         >
           <LayoutGrid className="w-4 h-4 text-amber-400" />
-          <span>Notion Database Hub</span>
+          <span>Database Hub</span>
         </button>
 
         <button
