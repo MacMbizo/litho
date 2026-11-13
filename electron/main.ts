@@ -390,3 +390,44 @@ ipcMain.handle('fs:revealInExplorer', async (_, targetPath: string) => {
   shell.showItemInFolder(targetPath);
   return true;
 });
+
+// Notes: the home for Markdown that isn't part of any project. Created on first use.
+ipcMain.handle('notes:getFolder', async () => {
+  const dir = path.join(app.getPath('documents'), 'DocAtlas Notes');
+  await fs.promises.mkdir(dir, { recursive: true });
+  return dir;
+});
+
+const MARKDOWN_FILTERS = [
+  { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
+  { name: 'All files', extensions: ['*'] },
+];
+
+ipcMain.handle('dialog:openMarkdownFiles', async () => {
+  const options: Electron.OpenDialogOptions = {
+    title: 'Open Markdown file',
+    properties: ['openFile', 'multiSelections'],
+    filters: MARKDOWN_FILTERS,
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? [] : result.filePaths;
+});
+
+ipcMain.handle('dialog:saveMarkdownFile', async (_, defaultPath?: string) => {
+  const options: Electron.SaveDialogOptions = {
+    title: 'Save Markdown file as',
+    defaultPath,
+    filters: MARKDOWN_FILTERS,
+  };
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+  return result.canceled || !result.filePath ? null : result.filePath;
+});
+
+ipcMain.handle('fs:fileInfo', async (_, filePath: string) => {
+  try {
+    const stat = await fs.promises.stat(filePath);
+    return { exists: stat.isFile(), lastModifiedMs: stat.mtimeMs };
+  } catch {
+    return { exists: false };
+  }
+});

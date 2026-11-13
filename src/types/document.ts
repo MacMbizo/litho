@@ -55,6 +55,8 @@ export interface ProjectWorkspace {
   name: string;
   rootPath: string;
   isLocalFolder: boolean;
+  /** 'notes' = the standalone Notes home (no project; DocPassport and stack checks don't apply). */
+  kind?: 'project' | 'notes';
   tree: FileTreeNode;
   files: MarkdownFile[];
   configFiles?: Record<string, string>;

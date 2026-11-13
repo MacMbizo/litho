@@ -39,6 +39,22 @@ import { AISummaryModal } from './components/ai/AISummaryModal';
 import { AISettingsModal } from './components/ai/AISettingsModal';
 import { ProjectChatDrawer } from './components/ai/ProjectChatDrawer';
 import { ToastProvider, useToast } from './components/ui/Toast';
+import {
+  ELSEWHERE_PREFIX,
+  newNoteContent,
+  findOwningRoot,
+  isElsewhereId,
+  newNoteFileName,
+  relativeInside,
+  samePath,
+} from './services/notesWorkspace';
+import {
+  getNotesFolder,
+  loadExternalPaths,
+  loadNotesWorkspace,
+  saveExternalPaths,
+  withExternalPaths,
+} from './services/notesStore';
 
 const SAVED_WORKSPACE_PATH_KEY = 'notion_active_project_path';
 const SAVED_PORTFOLIO_ROOT_KEY = 'notion_portfolio_root_path';
@@ -99,6 +115,11 @@ const AppContent: React.FC = () => {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [projectChatOpen, setProjectChatOpen] = useState(false);
   const [editorPassportOpen, setEditorPassportOpen] = useState(false);
+
+  // Notes (see showNotes): folder path and the outside files listed in it, loaded on first use.
+  const notesDirRef = useRef<string | null>(null);
+  const externalPathsRef = useRef<string[] | null>(null);
+  const showNotesRef = useRef<(opts?: { keepView?: boolean }) => Promise<unknown>>(async () => null);
 
   const handleWidthChange = (w: number) => {
     setSidebarWidth(w);
@@ -168,8 +189,11 @@ const AppContent: React.FC = () => {
     [liveWorkspace, activeStackProfile]
   );
   const activeDocAudit = useMemo(
-    () => (activeFile ? activeAuditReport.inventory.find((i) => i.fileId === activeFile.id) || null : null),
-    [activeAuditReport.inventory, activeFile]
+    () =>
+      activeFile && workspace.kind !== 'notes'
+        ? activeAuditReport.inventory.find((i) => i.fileId === activeFile.id) || null
+        : null,
+    [activeAuditReport.inventory, activeFile, workspace.kind]
   );
 
   // Portfolio: summaries are audited locally first, then enriched with live registry drift in the background.
@@ -282,7 +306,12 @@ const AppContent: React.FC = () => {
 
     const savedPath = localStorage.getItem(SAVED_WORKSPACE_PATH_KEY);
     if (savedPath) {
-      ProjectScannerService.scanPath(savedPath)
+      getNotesFolder()
+        .then((dir) => {
+          notesDirRef.current = dir;
+          // Notes reopen through their own loader so files opened from elsewhere come back too.
+          return dir && samePath(dir, savedPath) ? showNotesRef.current({ keepView: true }).then(() => null) : ProjectScannerService.scanPath(savedPath);
+        })
         .then((ws) => {
           if (ws) {
             setWorkspace(ws);
@@ -334,6 +363,10 @@ const AppContent: React.FC = () => {
     const unsubscribe = window.electronAPI.onFsChanged((data) => {
       const ws = workspaceRef.current;
       if (!ws.isLocalFolder || !ws.rootPath || (data?.rootDir && data.rootDir !== ws.rootPath)) return;
+      if (ws.kind === 'notes') {
+        showNotesRef.current().then(() => toast('Disk Change Detected', `Updated ${data.changedFile}`, 'info'));
+        return;
+      }
       ProjectScannerService.scanPath(ws.rootPath).then((refreshed) => {
         if (!refreshed || workspaceRef.current.rootPath !== refreshed.rootPath) return;
         applyRefreshedWorkspace(refreshed);
@@ -347,11 +380,23 @@ const AppContent: React.FC = () => {
 
   // Global keyboard shortcuts. Handlers are read through a ref so they never act on stale state.
   const saveRef = useRef<() => void>(() => {});
+  const saveAsRef = useRef<() => void>(() => {});
+  const newNoteRef = useRef<() => void>(() => {});
+  const openFileRef = useRef<() => void>(() => {});
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        saveRef.current();
+        if (e.shiftKey) saveAsRef.current();
+        else saveRef.current();
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        newNoteRef.current();
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        openFileRef.current();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
         e.preventDefault();
@@ -389,7 +434,10 @@ const AppContent: React.FC = () => {
 
   // Refresh current project
   const handleRefreshProject = async (silent = false) => {
-    if (workspace.isLocalFolder && workspace.rootPath) {
+    if (workspace.kind === 'notes') {
+      await showNotes();
+      if (!silent) toast('Notes Rescanned', `${workspaceRef.current.files.length} files`, 'info');
+    } else if (workspace.isLocalFolder && workspace.rootPath) {
       const refreshed = await ProjectScannerService.scanPath(workspace.rootPath);
       if (refreshed) {
         applyRefreshedWorkspace(refreshed);
@@ -411,7 +459,12 @@ const AppContent: React.FC = () => {
     const fileName = `${type}-${timestamp}.md`;
 
     let folderPath = targetFolder || '';
-    if (!folderPath) {
+    if (workspace.isLocalFolder && folderPath && /^([A-Za-z]:|[\\/])/.test(folderPath)) {
+      // Tree folders pass their absolute path; files are created relative to the workspace root.
+      folderPath = samePath(folderPath, workspace.rootPath) ? '' : relativeInside(folderPath, workspace.rootPath) ?? '';
+    }
+    if (workspace.kind === 'notes' && isElsewhereId(folderPath)) folderPath = '';
+    if (!folderPath && workspace.kind !== 'notes') {
       folderPath = type === 'agent' ? 'agents' : type === 'skill' ? 'skills' : type === 'project' ? 'projects' : 'docs';
     }
 
@@ -495,8 +548,7 @@ const AppContent: React.FC = () => {
 
   /** Writes new frontmatter/body for a file to memory and (for local projects) disk. */
   const persistFile = async (file: MarkdownFile, frontmatter: DocumentMetadata, body: string): Promise<MarkdownFile> => {
-    const hasKeys = Object.keys(frontmatter).some((k) => frontmatter[k] !== undefined);
-    const content = hasKeys ? MarkdownService.stringify(frontmatter, body) : body;
+    const content = MarkdownService.rebuild(file, frontmatter, body);
     const parsed = MarkdownService.parse(content, file.path);
     const updated: MarkdownFile = {
       ...file,
@@ -781,8 +833,167 @@ const AppContent: React.FC = () => {
     toast('Sample Vault', 'Switched to the built-in sample workspace', 'info');
   };
 
+  // ---------------------------------------------------------------------------
+  // Notes: Markdown outside any project (desktop). A watched folder under Documents, plus files the
+  // user opened from elsewhere, which stay where they are and are saved in place.
+  // ---------------------------------------------------------------------------
+  const canUseNotes = ProjectScannerService.isElectron() && Boolean(window.electronAPI?.getNotesFolder);
+
+  const ensureNotesFolder = async (): Promise<string> => {
+    if (!notesDirRef.current) notesDirRef.current = await getNotesFolder();
+    if (!notesDirRef.current) throw new Error('Notes need the desktop app');
+    if (!externalPathsRef.current) externalPathsRef.current = await loadExternalPaths();
+    return notesDirRef.current;
+  };
+
+  /**
+   * Loads Notes from disk and shows it, switching workspace if needed. `select` picks files to open as
+   * tabs; when switching with nothing selected, the most recently edited note opens.
+   */
+  const showNotes = async (
+    select?: (ws: ProjectWorkspace) => string[],
+    opts?: { keepView?: boolean }
+  ): Promise<ProjectWorkspace | null> => {
+    try {
+      const dir = await ensureNotesFolder();
+      const { workspace: ws, kept } = await loadNotesWorkspace(dir, externalPathsRef.current ?? []);
+      if (kept.length !== (externalPathsRef.current ?? []).length) {
+        externalPathsRef.current = kept;
+        saveExternalPaths(kept);
+      }
+      const wasNotes = workspaceRef.current.kind === 'notes';
+      const wanted = (select?.(ws) ?? []).filter((id) => ws.files.some((f) => f.id === id));
+      applyRefreshedWorkspace(ws);
+      if (wasNotes) {
+        if (wanted.length > 0) {
+          setOpenFileIds((prev) => [...prev, ...wanted.filter((id) => !prev.includes(id))]);
+          setActiveFileId(wanted[wanted.length - 1]);
+          setViewMode('editor');
+        }
+      } else {
+        const recent = [...ws.files].sort((a, b) => (b.lastModifiedMs ?? 0) - (a.lastModifiedMs ?? 0))[0];
+        const initial = wanted.length > 0 ? wanted : recent ? [recent.id] : [];
+        setOpenFileIds(initial);
+        setActiveFileId(initial[initial.length - 1] ?? null);
+        localStorage.setItem(SAVED_WORKSPACE_PATH_KEY, ws.rootPath);
+        if (!opts?.keepView) setViewMode('editor');
+      }
+      return ws;
+    } catch (err: any) {
+      toast('Could Not Open Notes', err?.message || 'Unknown error', 'error');
+      return null;
+    }
+  };
+  showNotesRef.current = (opts) => showNotes(undefined, opts);
+
+  const handleOpenNotes = () => {
+    if (workspace.kind === 'notes') setViewMode('editor');
+    else showNotes();
+  };
+
+  /** Ctrl+N: a blank note in the Notes folder, open and ready to type, from anywhere in the app. */
+  const handleNewNote = async () => {
+    if (!canUseNotes) {
+      handleNewFile('document');
+      return;
+    }
+    try {
+      const dir = await ensureNotesFolder();
+      const taken: string[] = [];
+      let name = newNoteFileName(new Date(), taken);
+      while ((await window.electronAPI!.fileInfo?.(`${dir}/${name}`))?.exists) {
+        taken.push(name);
+        name = newNoteFileName(new Date(), taken);
+      }
+      await ProjectScannerService.createFile(dir, name, newNoteContent(name));
+      const ws = await showNotes(() => [name]);
+      if (ws) toast('New Note', name, 'success');
+    } catch (err: any) {
+      toast('Could Not Create Note', err?.message || 'Unknown error', 'error');
+    }
+  };
+
+  /**
+   * Opens Markdown files from anywhere on disk. Files that all belong to one known project open in
+   * that project (so DocPassport applies); anything else opens in Notes and is saved in place.
+   */
+  const openMarkdownPaths = async (paths: string[], quiet = false) => {
+    if (paths.length === 0) return;
+    const projectRoots = [
+      ...portfolioProjects.map((e) => e.workspace.rootPath),
+      ...(workspace.isLocalFolder && workspace.kind !== 'notes' ? [workspace.rootPath] : []),
+    ];
+    const owner = findOwningRoot(paths[0], projectRoots);
+    if (owner && paths.every((p) => findOwningRoot(p, projectRoots) === owner)) {
+      const ids = paths.map((p) => relativeInside(p, owner)!);
+      const fresh = await ProjectScannerService.scanPath(owner).catch(() => null);
+      // A file in an ignored folder (node_modules, dist...) isn't part of the project: fall through to Notes.
+      if (fresh && ids.every((id) => fresh.files.some((f) => f.id === id))) {
+        const isCurrent = workspace.isLocalFolder && workspace.kind !== 'notes' && samePath(workspace.rootPath, owner);
+        applyRefreshedWorkspace(fresh);
+        setOpenFileIds((prev) => (isCurrent ? [...prev, ...ids.filter((id) => !prev.includes(id))] : ids));
+        setActiveFileId(ids[ids.length - 1]);
+        if (!isCurrent) localStorage.setItem(SAVED_WORKSPACE_PATH_KEY, fresh.rootPath);
+        setViewMode('editor');
+        if (!quiet) toast('Opened in Project', `${fresh.name}: ${ids[ids.length - 1]}`, 'success');
+        return;
+      }
+    }
+
+    try {
+      const dir = await ensureNotesFolder();
+      const outside = paths.filter((p) => relativeInside(p, dir) === null);
+      if (outside.length > 0) {
+        externalPathsRef.current = withExternalPaths(externalPathsRef.current ?? [], outside);
+        saveExternalPaths(externalPathsRef.current);
+      }
+      const ws = await showNotes((loaded) =>
+        paths
+          .map((p) => loaded.files.find((f) => f.fullPath && samePath(f.fullPath, p))?.id)
+          .filter((id): id is string => Boolean(id))
+      );
+      if (ws && !quiet) {
+        toast(
+          paths.length === 1 ? 'Opened' : `Opened ${paths.length} files`,
+          outside.length > 0 ? 'Listed in Notes and saved in place' : 'From your Notes folder',
+          'success'
+        );
+      }
+    } catch (err: any) {
+      toast('Could Not Open File', err?.message || 'Unknown error', 'error');
+    }
+  };
+
+  const handleOpenMarkdownFile = async () => {
+    if (!window.electronAPI?.openMarkdownFiles) return;
+    const paths = await window.electronAPI.openMarkdownFiles();
+    await openMarkdownPaths(paths);
+  };
+
+  /** Writes the active document to a file the user picks, then keeps editing that file. */
+  const handleSaveAs = async () => {
+    const file = activeFile;
+    if (!file || !window.electronAPI?.saveMarkdownFileAs) return;
+    const dir = notesDirRef.current ?? (await getNotesFolder());
+    const suggested = (file.fullPath || (dir ? `${dir}/${file.name}` : file.name)).replace(/\//g, '\\');
+    const target = await window.electronAPI.saveMarkdownFileAs(suggested);
+    if (!target) return;
+    if (file.fullPath && samePath(target, file.fullPath)) {
+      await handleSave();
+      return;
+    }
+    try {
+      await window.electronAPI.writeFile(target, file.content);
+      await openMarkdownPaths([target], true);
+      toast('Saved As', target, 'success');
+    } catch (err: any) {
+      toast('Save As Failed', err?.message || target, 'error');
+    }
+  };
+
   // Create new subfolder
   const handleNewFolder = async (parentFolder: string, folderName: string) => {
+    if (isElsewhereId(parentFolder)) return;
     if (workspace.isLocalFolder) {
       const targetPath = `${parentFolder}/${folderName}`.replace(/\\/g, '/');
       await ProjectScannerService.createFolder(targetPath);
@@ -793,6 +1004,23 @@ const AppContent: React.FC = () => {
 
   // Rename node
   const handleRenameNode = async (node: FileTreeNode, newName: string) => {
+    if (workspace.kind === 'notes' && isElsewhereId(node.id)) {
+      if (node.isFolder || !node.fullPath) return;
+      const oldPath = node.fullPath;
+      const newPath = `${oldPath.slice(0, oldPath.lastIndexOf('/'))}/${newName}`;
+      try {
+        await ProjectScannerService.renamePath(oldPath, newPath);
+      } catch (err: any) {
+        toast('Rename Failed', err?.message || newName, 'error');
+        return;
+      }
+      externalPathsRef.current = (externalPathsRef.current ?? []).map((p) => (samePath(p, oldPath) ? newPath : p));
+      saveExternalPaths(externalPathsRef.current);
+      setOpenFileIds((prev) => prev.filter((id) => id !== node.id));
+      await showNotes((ws) => ws.files.filter((f) => f.fullPath && samePath(f.fullPath, newPath)).map((f) => f.id));
+      toast('Renamed', newName, 'success');
+      return;
+    }
     if (workspace.isLocalFolder && node.fullPath) {
       const lastSlash = Math.max(node.fullPath.lastIndexOf('/'), node.fullPath.lastIndexOf('\\'));
       const parentDir = lastSlash !== -1 ? node.fullPath.substring(0, lastSlash) : node.fullPath;
@@ -805,6 +1033,16 @@ const AppContent: React.FC = () => {
 
   // Delete file or folder
   const handleDeleteFile = async (id: string, fullPath?: string) => {
+    // Files opened from elsewhere are only listed in Notes: forget them, never delete them.
+    if (workspace.kind === 'notes' && isElsewhereId(id)) {
+      const all = id === ELSEWHERE_PREFIX;
+      externalPathsRef.current = all ? [] : (externalPathsRef.current ?? []).filter((p) => !(fullPath && samePath(p, fullPath)));
+      saveExternalPaths(externalPathsRef.current);
+      setOpenFileIds((prev) => prev.filter((tabId) => (all ? !isElsewhereId(tabId) : tabId !== id)));
+      await showNotes();
+      toast('Removed from Notes', 'The file is still on disk', 'info');
+      return;
+    }
     setOpenFileIds((prev) => prev.filter((tabId) => tabId !== id));
     if (workspace.isLocalFolder && fullPath) {
       await ProjectScannerService.deletePath(fullPath);
@@ -891,6 +1129,13 @@ const AppContent: React.FC = () => {
     );
   };
   saveRef.current = handleSave;
+  saveAsRef.current = () => {
+    if (canUseNotes) handleSaveAs();
+  };
+  newNoteRef.current = handleNewNote;
+  openFileRef.current = () => {
+    if (canUseNotes) handleOpenMarkdownFile();
+  };
 
   // Every DocPassport action, shared by the project dashboard and the editor pill's modal.
   const docActions = {
@@ -930,7 +1175,7 @@ const AppContent: React.FC = () => {
         portfolioRootPath={portfolioRootPath}
         onSelectPortfolioProject={handleOpenPortfolioProject}
         onOpenSampleVault={handleOpenSampleVault}
-        auditReport={activeAuditReport}
+        auditReport={workspace.kind === 'notes' ? undefined : activeAuditReport}
         activeFileId={activeFileId}
         onSelectFile={handleSelectFile}
         onNewFile={handleNewFile}
@@ -938,6 +1183,9 @@ const AppContent: React.FC = () => {
         onRenameNode={handleRenameNode}
         onDeleteFile={handleDeleteFile}
         onOpenProjectFolder={handleOpenProjectFolder}
+        onOpenNotes={canUseNotes ? handleOpenNotes : undefined}
+        onNewNote={canUseNotes ? handleNewNote : undefined}
+        onOpenMarkdownFile={canUseNotes ? handleOpenMarkdownFile : undefined}
         viewMode={viewMode}
         onSelectViewMode={setViewMode}
         onOpenSettings={() => setSettingsModalOpen(true)}
@@ -988,9 +1236,10 @@ const AppContent: React.FC = () => {
           isRawMarkdown={isRawMarkdown}
           onToggleRawMarkdown={() => setIsRawMarkdown(!isRawMarkdown)}
           onSave={handleSave}
+          onSaveAs={canUseNotes ? handleSaveAs : undefined}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={() => setIsSidebarCollapsed(false)}
-          onOpenProjectOverview={() => setViewMode('project-overview')}
+          onOpenProjectOverview={() => (workspace.kind === 'notes' ? handleOpenNotes() : setViewMode('project-overview'))}
         />
 
         {/* Multi-Document Tab Bar */}
@@ -1000,7 +1249,7 @@ const AppContent: React.FC = () => {
           files={files}
           onSelectTab={handleSelectFile}
           onCloseTab={handleCloseTab}
-          onNewTab={() => handleNewFile('document')}
+          onNewTab={() => (workspace.kind === 'notes' ? handleNewNote() : handleNewFile('document'))}
         />
         </>
         )}
@@ -1024,6 +1273,8 @@ const AppContent: React.FC = () => {
               onRemoveRoot={handleRemovePortfolioRoot}
               onRescanProject={handleRescanPortfolioProject}
               onOpenProject={handleOpenPortfolioProject}
+              onNewNote={canUseNotes ? handleNewNote : undefined}
+              onOpenMarkdownFile={canUseNotes ? handleOpenMarkdownFile : undefined}
             />
           )}
 
@@ -1114,6 +1365,9 @@ const AppContent: React.FC = () => {
         onSelectFile={handleSelectFile}
         onSelectViewMode={setViewMode}
         onNewFile={handleNewFile}
+        onNewNote={canUseNotes ? handleNewNote : undefined}
+        onOpenNotes={canUseNotes ? handleOpenNotes : undefined}
+        onOpenMarkdownFile={canUseNotes ? handleOpenMarkdownFile : undefined}
       />
 
       {/* Vault / Project RAG Chat Drawer */}

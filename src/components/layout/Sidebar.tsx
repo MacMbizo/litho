@@ -25,7 +25,9 @@ import {
   Edit3,
   PanelLeftClose,
   PanelLeftOpen,
-  FolderGit2
+  FolderGit2,
+  NotebookPen,
+  FileInput,
 } from 'lucide-react';
 import { MarkdownFile, ViewMode, DocType, FileTreeNode, ProjectWorkspace } from '../../types/document';
 import { PortfolioProjectSummary, ProjectDocAuditReport, DocInventoryItem } from '../../types/docAudit';
@@ -48,6 +50,10 @@ interface SidebarProps {
   onRenameNode?: (node: FileTreeNode, newName: string) => void;
   onDeleteFile: (id: string, fullPath?: string) => void;
   onOpenProjectFolder: () => void;
+  /** Notes: the home for Markdown outside any project (desktop only). */
+  onOpenNotes?: () => void;
+  onNewNote?: () => void;
+  onOpenMarkdownFile?: () => void;
   viewMode: ViewMode;
   onSelectViewMode: (mode: ViewMode) => void;
   onOpenSettings: () => void;
@@ -78,6 +84,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRenameNode,
   onDeleteFile,
   onOpenProjectFolder,
+  onOpenNotes,
+  onNewNote,
+  onOpenMarkdownFile,
   viewMode,
   onSelectViewMode,
   onOpenSettings,
@@ -96,6 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [treeTab, setTreeTab] = useState<'files' | 'portfolio'>('files');
   const [showProjectSwitcher, setShowProjectSwitcher] = useState<boolean>(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const isNotes = project?.kind === 'notes';
   const passportById = React.useMemo(() => {
     const map = new Map<string, DocInventoryItem>();
     for (const item of auditReport?.inventory || []) map.set(item.fileId, item);
@@ -321,7 +331,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
             <div className="text-[10px] text-neutral-500 truncate">
-              {project?.isLocalFolder ? 'Local Workspace' : 'Sample Vault'}
+              {isNotes ? 'Notes outside any project' : project?.isLocalFolder ? 'Local Workspace' : 'Sample Vault'}
             </div>
           </div>
         </div>
@@ -362,6 +372,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
               );
             })}
             <div className="border-t border-[#323238] mt-1 pt-1">
+              {onOpenNotes && (
+                <button
+                  onClick={() => {
+                    onOpenNotes();
+                    setShowProjectSwitcher(false);
+                    setTreeTab('files');
+                  }}
+                  className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-1.5 transition ${
+                    isNotes ? 'bg-indigo-500/20 text-indigo-200' : 'text-neutral-300 hover:bg-[#2c2c32]'
+                  }`}
+                >
+                  <NotebookPen className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Notes</span>
+                </button>
+              )}
               {onOpenSampleVault && (
                 <button
                   onClick={() => {
@@ -392,6 +417,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         <div className="flex items-center gap-1">
+          {onOpenMarkdownFile && (
+            <button
+              onClick={onOpenMarkdownFile}
+              className="p-1.5 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-white transition"
+              title="Open a Markdown file… (Ctrl+O)"
+              aria-label="Open a Markdown file"
+            >
+              <FileInput className="w-3.5 h-3.5 text-sky-400" />
+            </button>
+          )}
           <button
             onClick={onOpenProjectFolder}
             className="p-1.5 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-white transition"
@@ -449,19 +484,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </button>
 
+        {onOpenNotes && (
+          <div
+            className={`group w-full flex items-center justify-between rounded-md text-xs font-medium transition ${
+              isNotes && viewMode !== 'portfolio' ? 'bg-[#2c2c2c] text-neutral-100' : 'hover:bg-[#262626] text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            <button
+              onClick={onOpenNotes}
+              className="flex-1 min-w-0 flex items-center gap-2.5 px-2.5 py-1.5 text-left"
+              title="Markdown that isn't part of any project"
+            >
+              <NotebookPen className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className="truncate">Notes</span>
+            </button>
+            {onNewNote && (
+              <button
+                onClick={onNewNote}
+                className="mr-1 p-1 rounded text-neutral-500 hover:text-white hover:bg-[#363636] transition"
+                title="New note (Ctrl+N)"
+                aria-label="New note"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-600 truncate">
           Workspace: {project?.name || 'Vault'}
         </div>
 
-        <button
-          onClick={() => onSelectViewMode('project-overview')}
-          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
-            viewMode === 'project-overview' ? 'bg-[#2c2c2c] text-neutral-100' : 'hover:bg-[#262626] text-neutral-400 hover:text-neutral-200'
-          }`}
-        >
-          <Activity className="w-4 h-4 text-emerald-400" />
-          <span>Project Overview</span>
-        </button>
+        {!isNotes && (
+          <button
+            onClick={() => onSelectViewMode('project-overview')}
+            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
+              viewMode === 'project-overview' ? 'bg-[#2c2c2c] text-neutral-100' : 'hover:bg-[#262626] text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            <Activity className="w-4 h-4 text-emerald-400" />
+            <span>Project Overview</span>
+          </button>
+        )}
 
         <button
           onClick={() => onSelectViewMode('editor')}

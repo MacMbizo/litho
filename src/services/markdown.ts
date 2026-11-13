@@ -58,6 +58,17 @@ export class MarkdownService {
   /**
    * Serializes frontmatter and body back into standard markdown
    */
+  /**
+   * Rebuilds a file after an edit without adding frontmatter it never had. `parse` fills in a default
+   * type/title for plain files; writing those back would turn every edited README or note into YAML.
+   * Frontmatter is written when the file already had it, or when its properties actually changed.
+   */
+  static rebuild(original: { content: string; frontmatter: DocumentMetadata }, frontmatter: DocumentMetadata, body: string): string {
+    if (this.hasFrontmatter(original.content)) return this.stringify(frontmatter, body);
+    const changed = JSON.stringify(frontmatter) !== JSON.stringify(original.frontmatter);
+    return changed ? this.stringify(frontmatter, body) : body;
+  }
+
   static stringify(frontmatter: DocumentMetadata, body: string): string {
     // Clean empty/undefined keys
     const cleanFrontmatter: Record<string, any> = {};

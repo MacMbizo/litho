@@ -38,7 +38,7 @@ export const GlobalTaskRolodex: React.FC<GlobalTaskRolodexProps> = ({
     if (!targetFile) return;
 
     const newBody = MarkdownService.toggleTask(targetFile.body, task.line, !task.completed);
-    const fullMarkdown = MarkdownService.stringify(targetFile.frontmatter, newBody);
+    const fullMarkdown = MarkdownService.rebuild(targetFile, targetFile.frontmatter, newBody);
     onUpdateFileContent(targetFile.id, fullMarkdown);
   };
 

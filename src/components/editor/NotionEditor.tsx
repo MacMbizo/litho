@@ -72,7 +72,7 @@ export const NotionEditor: React.FC<NotionEditorProps> = ({
 
   // Sync body changes & detect [[Wiki-Link]] trigger
   const handleBodyChange = (newBody: string, cursorOverride?: number) => {
-    const fullMarkdown = MarkdownService.stringify(file.frontmatter, newBody);
+    const fullMarkdown = MarkdownService.rebuild(file, file.frontmatter, newBody);
     onChange(fullMarkdown, file.frontmatter);
 
     const textarea = textareaRef.current;
@@ -134,7 +134,7 @@ export const NotionEditor: React.FC<NotionEditorProps> = ({
         insertion +
         (hasClosingBrackets ? textAfter.slice(2) : textAfter);
 
-      const fullMarkdown = MarkdownService.stringify(file.frontmatter, nextBody);
+      const fullMarkdown = MarkdownService.rebuild(file, file.frontmatter, nextBody);
       onChange(fullMarkdown, file.frontmatter);
       setWikiMenuOpen(false);
 

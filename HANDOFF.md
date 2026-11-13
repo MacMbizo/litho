@@ -17,7 +17,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (29) | `npm test` |
+| Unit tests (38) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -30,6 +30,33 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 - `a0e5de8` Audit calibrated on the real `C:\Prj` projects
 - `2222dca` Audit/remediation bug fixes, module-doc state, auto-heal
 - `5e2ecdd` Checkpoint of the previous agent's work
+
+## Notes (Markdown outside any project), added 2026-11-13
+
+- **What it does:** `Ctrl+N` creates a plain note from anywhere in the app. `Ctrl+O` opens any .md file. `Ctrl+Shift+S` is "Save as…". Notes also has a sidebar entry and a "New note" button on the portfolio header.
+- **Where notes live:** `Documents\DocAtlas Notes`, scanned and watched like a project. The workspace has `kind: 'notes'`, so DocPassport and Project Overview are hidden there.
+- **Files opened from elsewhere:**
+  - They are listed under a virtual "Opened from elsewhere" folder. Ids look like `~elsewhere/<name>`, and `fullPath` is the real file, which is saved in place.
+  - Their paths are stored in `userData/docatlas/notes.json`.
+  - "Remove from Notes" only forgets a file; it never deletes it.
+  - Missing files are dropped on load.
+- **Opening a file that belongs to a known project:** it opens in that project, so DocPassport applies.
+- **Code:**
+  - `src/services/notesWorkspace.ts` holds the pure helpers and has tests.
+  - `src/services/notesStore.ts` loads the folder and the remembered list.
+  - In `App.tsx`: `showNotes`, `handleNewNote`, `openMarkdownPaths`, `handleSaveAs`.
+  - IPC: `notes:getFolder`, `dialog:openMarkdownFiles`, `dialog:saveMarkdownFile`, `fs:fileInfo`.
+- **Fixed in the same pass:**
+  - Editing a file without frontmatter used to inject `type`/`title`/`tags` YAML. This affected every README in every project. `MarkdownService.rebuild` now keeps a plain file plain unless its properties actually change.
+  - "New File in Folder" joined an absolute folder path onto the project root.
+- **Verified:**
+  - 38 unit tests.
+  - An 18-step Electron run with the native dialogs stubbed: new note, autosave, open an outside file, Save as, Remove, relaunch, a project file opening in its project, and no console errors.
+  - The test script is not in the repo.
+- **Ideas not built:**
+  - Rename a note's file from its heading.
+  - A setting to choose the notes folder.
+  - Registering as the Windows handler for .md files (needs packaging).
 
 ## Where things live
 

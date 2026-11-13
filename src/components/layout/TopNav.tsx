@@ -25,6 +25,7 @@ import {
   Copy,
   CheckCircle2,
   Archive,
+  SaveAll,
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
 import { DocInventoryItem } from '../../types/docAudit';
@@ -43,6 +44,8 @@ interface TopNavProps {
   isRawMarkdown: boolean;
   onToggleRawMarkdown: () => void;
   onSave: () => void;
+  /** Desktop only: write the document to a file you choose, then keep editing that file. */
+  onSaveAs?: () => void;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   onOpenProjectOverview?: () => void;
@@ -61,6 +64,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   isRawMarkdown,
   onToggleRawMarkdown,
   onSave,
+  onSaveAs,
   isSidebarCollapsed,
   onToggleSidebar,
   onOpenProjectOverview,
@@ -276,7 +280,25 @@ export const TopNav: React.FC<TopNavProps> = ({
           </button>
 
           {showExportMenu && (
-            <div className="absolute right-0 top-full mt-1.5 w-44 bg-[#222] border border-[#383838] rounded-lg shadow-xl py-1 z-50 font-sans">
+            <div className="absolute right-0 top-full mt-1.5 w-56 bg-[#222] border border-[#383838] rounded-lg shadow-xl py-1 z-50 font-sans">
+              {onSaveAs && (
+                <>
+                  <button
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      onSaveAs();
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#2c2c2c] hover:text-white flex items-center justify-between gap-2"
+                  >
+                    <span className="flex items-center gap-2">
+                      <SaveAll className="w-3.5 h-3.5 text-sky-400" />
+                      <span>Save as…</span>
+                    </span>
+                    <kbd className="text-[10px] text-neutral-500">Ctrl+Shift+S</kbd>
+                  </button>
+                  <div className="h-px bg-[#333] my-1" />
+                </>
+              )}
               <button
                 onClick={handleExportMarkdown}
                 className="w-full text-left px-3 py-1.5 text-xs text-neutral-300 hover:bg-[#2c2c2c] hover:text-white flex items-center gap-2"

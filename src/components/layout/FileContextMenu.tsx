@@ -6,10 +6,12 @@ import {
   Trash2, 
   ExternalLink, 
   Sparkles, 
-  Layers 
+  Layers,
+  Unlink,
 } from 'lucide-react';
 import { FileTreeNode } from '../../types/document';
 import { ProjectScannerService } from '../../services/projectScanner';
+import { ELSEWHERE_PREFIX, isElsewhereId } from '../../services/notesWorkspace';
 
 export interface ContextMenuState {
   x: number;
@@ -61,6 +63,9 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
 
   const { x, y, node } = menu;
   const isElectron = ProjectScannerService.isElectron();
+  // Files opened from elsewhere are only listed in Notes: "remove" forgets them, never deletes them.
+  const isElsewhere = isElsewhereId(node.id);
+  const isVirtualFolder = node.id === ELSEWHERE_PREFIX;
 
   // Keep menu within screen boundaries
   const adjustedX = Math.min(x, window.innerWidth - 220);
@@ -78,7 +83,7 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
 
       <div className="p-1 space-y-0.5">
         {/* If it's a folder: New File / Subfolder */}
-        {node.isFolder && (
+        {node.isFolder && !isVirtualFolder && (
           <>
             <button
               onClick={() => {
@@ -119,6 +124,7 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
         )}
 
         {/* Rename */}
+        {!isVirtualFolder && (
         <button
           onClick={() => {
             onRename(node);
@@ -129,6 +135,7 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
           <Edit3 className="w-3.5 h-3.5 text-neutral-400" />
           <span>Rename</span>
         </button>
+        )}
 
         {/* Reveal in explorer (Electron only) */}
         {isElectron && node.fullPath && (
@@ -146,7 +153,20 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
 
         <div className="h-[1px] bg-[#2e2e2e] my-1" />
 
-        {/* Delete */}
+        {/* Delete (or, for files opened from elsewhere, just stop listing them) */}
+        {isElsewhere ? (
+          <button
+            onClick={() => {
+              onDelete(node);
+              onClose();
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-[#2e2e2e] hover:text-white transition text-left"
+            title="The file stays where it is on disk"
+          >
+            <Unlink className="w-3.5 h-3.5 text-neutral-400" />
+            <span>{isVirtualFolder ? 'Remove all from Notes' : 'Remove from Notes'}</span>
+          </button>
+        ) : (
         <button
           onClick={() => {
             onDelete(node);
@@ -157,6 +177,7 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
           <Trash2 className="w-3.5 h-3.5" />
           <span>Delete</span>
         </button>
+        )}
       </div>
     </div>
   );

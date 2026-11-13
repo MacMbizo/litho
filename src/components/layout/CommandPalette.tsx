@@ -10,7 +10,9 @@ import {
   ArrowRight, 
   Share2, 
   Clock, 
-  CornerDownLeft 
+  CornerDownLeft,
+  NotebookPen,
+  FileInput,
 } from 'lucide-react';
 import { MarkdownFile, ViewMode, DocType } from '../../types/document';
 
@@ -21,6 +23,9 @@ interface CommandPaletteProps {
   onSelectFile: (id: string) => void;
   onSelectViewMode: (mode: ViewMode) => void;
   onNewFile: (type: DocType) => void;
+  onNewNote?: () => void;
+  onOpenNotes?: () => void;
+  onOpenMarkdownFile?: () => void;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -30,11 +35,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSelectFile,
   onSelectViewMode,
   onNewFile,
+  onNewNote,
+  onOpenNotes,
+  onOpenMarkdownFile,
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  const noteActions = [
+    onNewNote && { id: 'new-note', label: 'New Note (Ctrl+N)', icon: <NotebookPen className="w-4 h-4 text-sky-400" />, action: onNewNote },
+    onOpenMarkdownFile && { id: 'open-md', label: 'Open Markdown File… (Ctrl+O)', icon: <FileInput className="w-4 h-4 text-sky-400" />, action: onOpenMarkdownFile },
+    onOpenNotes && { id: 'notes', label: 'Go to Notes', icon: <NotebookPen className="w-4 h-4 text-sky-400" />, action: onOpenNotes },
+  ].filter(Boolean) as Array<{ id: string; label: string; icon: React.ReactNode; action: () => void }>;
   const actions = [
+    ...noteActions,
     { id: 'db', label: 'Go to Notion Database Hub', icon: <Layers className="w-4 h-4 text-amber-400" />, action: () => onSelectViewMode('database') },
     { id: 'agent-hub', label: 'Go to Agents & Skills Testbed', icon: <Bot className="w-4 h-4 text-purple-400" />, action: () => onSelectViewMode('agent-hub') },
     { id: 'tasks', label: 'Go to Global Tasks Rolodex', icon: <CheckSquare className="w-4 h-4 text-emerald-400" />, action: () => onSelectViewMode('tasks') },

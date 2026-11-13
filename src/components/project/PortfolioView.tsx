@@ -8,6 +8,7 @@ import {
   Copy,
   ExternalLink,
   FilePlus2,
+  FileInput,
   FileText,
   FolderGit2,
   FolderPlus,
@@ -15,6 +16,7 @@ import {
   Gauge,
   Layers3,
   Monitor,
+  NotebookPen,
   Radar,
   RefreshCw,
   Search,
@@ -47,6 +49,9 @@ interface PortfolioViewProps {
   onRemoveRoot: (root: string) => void;
   onRescanProject: (rootPath: string) => void;
   onOpenProject: (workspace: ProjectWorkspace, targetFileId?: string) => void;
+  /** Notes outside any project (desktop only). */
+  onNewNote?: () => void;
+  onOpenMarkdownFile?: () => void;
 }
 
 type PortfolioTab = 'projects' | 'stack';
@@ -111,6 +116,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
   onRemoveRoot,
   onRescanProject,
   onOpenProject,
+  onNewNote,
+  onOpenMarkdownFile,
 }) => {
   const initial = useMemo(readPrefs, []);
   const [tab, setTab] = useState<PortfolioTab>(initial.tab);
@@ -240,6 +247,33 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
     </button>
   );
 
+  // Writing that doesn't belong to a project starts here too, without leaving the landing page.
+  const noteButtons = (onNewNote || onOpenMarkdownFile) && (
+    <div className="flex items-center rounded-xl border border-[#363636] bg-[#262626] overflow-hidden">
+      {onNewNote && (
+        <button
+          onClick={onNewNote}
+          className="px-3 py-2 hover:bg-[#303030] text-xs font-medium text-neutral-200 flex items-center gap-1.5 transition"
+          title="New note outside any project (Ctrl+N)"
+        >
+          <NotebookPen className="w-3.5 h-3.5 text-sky-400" />
+          <span>New note</span>
+        </button>
+      )}
+      {onNewNote && onOpenMarkdownFile && <div className="w-px self-stretch bg-[#363636]" />}
+      {onOpenMarkdownFile && (
+        <button
+          onClick={onOpenMarkdownFile}
+          className="px-2.5 py-2 hover:bg-[#303030] text-neutral-300 transition"
+          title="Open any Markdown file (Ctrl+O)"
+          aria-label="Open a Markdown file"
+        >
+          <FileInput className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
+  );
+
   // ---------------------------------------------------------------------------
   // Empty / browser states
   // ---------------------------------------------------------------------------
@@ -282,6 +316,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                   <FolderPlus className="w-4 h-4" />
                   <span>{busy ? 'Scanning…' : 'Choose a projects folder…'}</span>
                 </button>
+                {noteButtons}
               </div>
             )}
             {isDesktop && (
@@ -442,6 +477,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                 className="w-full pl-8 pr-3 py-2 rounded-xl bg-[#161616] border border-[#333] text-xs text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:border-indigo-500"
               />
             </div>
+            {noteButtons}
             {scanParentButton}
             <button
               onClick={onRefreshPortfolio}

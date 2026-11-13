@@ -32,6 +32,10 @@ declare global {
       movePathSafe?: (oldPath: string, newPath: string) => Promise<string>;
       deletePath: (targetPath: string) => Promise<boolean>;
       revealInExplorer: (targetPath: string) => Promise<boolean>;
+      getNotesFolder?: () => Promise<string>;
+      openMarkdownFiles?: () => Promise<string[]>;
+      saveMarkdownFileAs?: (defaultPath?: string) => Promise<string | null>;
+      fileInfo?: (filePath: string) => Promise<{ exists: boolean; lastModifiedMs?: number }>;
       fetchJson: (url: string) => Promise<any>;
       storeRead?: (name: string) => Promise<any>;
       storeWrite?: (name: string, data: unknown) => Promise<boolean>;
