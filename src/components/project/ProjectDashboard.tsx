@@ -439,6 +439,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               report={freshnessReport}
               profile={liveStackProfile}
               checking={checkingLiveVersions}
+              projectRoot={project.isLocalFolder && project.kind !== 'notes' ? project.rootPath : undefined}
             />
           </div>
 

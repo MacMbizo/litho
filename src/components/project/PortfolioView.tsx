@@ -913,10 +913,11 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                 profile={detail.auditReport.stackProfile}
                 checking={rescanningProjectRoot === detail.workspace.rootPath}
                 onRecheck={() => onRescanProject(detail.workspace.rootPath)}
+                projectRoot={detail.workspace.rootPath}
               />
             </div>
             <div className="px-5 py-3 border-t border-[#2a2a2a] flex items-center justify-between gap-2">
-              <span className="text-[11px] text-neutral-500">Commands run in the project folder. Copy, review, then run.</span>
+              <span className="text-[11px] text-neutral-500">Fix runs the upgrade after you confirm. Other commands: copy, review, then run.</span>
               <button
                 type="button"
                 onClick={() => {

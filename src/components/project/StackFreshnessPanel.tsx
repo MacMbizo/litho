@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Check, Copy, PackageCheck, RefreshCw, ShieldAlert, Smartphone, Terminal, Wrench, Boxes } from 'lucide-react';
 import type { DetectedStackProfile, FreshnessIssue, StackFreshnessReport } from '../../types/docAudit';
 import { FRESHNESS_META } from '../../services/stackFreshness';
+import { useFix } from './fix/FixProvider';
 
 export function timeAgo(iso?: string | null, nowMs: number = Date.now()): string {
   if (!iso) return 'never';
@@ -74,36 +75,72 @@ const CommandLine: React.FC<{ cmd: string }> = ({ cmd }) => {
   );
 };
 
-export const FreshnessIssueRow: React.FC<{ issue: FreshnessIssue }> = ({ issue }) => (
-  <div className="p-3 rounded-xl bg-[#1b1b1b] border border-[#2a2a2a] space-y-2">
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <div className="text-[13px] font-semibold text-neutral-100">{issue.title}</div>
-        <p className="text-[11px] text-neutral-400 leading-relaxed mt-0.5">{issue.detail}</p>
+/** Why DocAtlas leaves a fix for you to run yourself. */
+export function copyOnlyReason(issue: FreshnessIssue, profile?: DetectedStackProfile): string {
+  if (issue.id.startsWith('runtime:')) return 'It changes Node or Python for your whole machine, not just this project.';
+  if (issue.id.startsWith('dep:')) {
+    const name = issue.id.split(':').slice(2).join(':');
+    if (name === 'next') return 'The Next.js upgrade tool asks questions as it runs.';
+    const d = profile?.dependencies.find((x) => x.name === name && (x.appPath || '') === issue.appPath);
+    if (d?.ecosystem === 'pypi') return 'DocAtlas can’t tell yet whether this project uses pip or uv.';
+  }
+  return 'Review it, then run it in a terminal.';
+}
+
+export const FreshnessIssueRow: React.FC<{ issue: FreshnessIssue; projectRoot?: string; profile?: DetectedStackProfile }> = ({ issue, projectRoot, profile }) => {
+  const fixer = useFix();
+  const canFix = fixer.available && Boolean(issue.fix) && Boolean(projectRoot);
+  const runnable = issue.commands.some((c) => !c.trim().startsWith('#'));
+  return (
+    <div className="p-3 rounded-xl bg-[#1b1b1b] border border-[#2a2a2a] space-y-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-neutral-100">{issue.title}</div>
+          <p className="text-[11px] text-neutral-400 leading-relaxed mt-0.5">{issue.detail}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {canFix && (
+            <button
+              type="button"
+              disabled={fixer.busy}
+              onClick={() => fixer.start(projectRoot!, issue)}
+              title={fixer.busy ? 'Another fix is running' : 'Fix: runs after you confirm'}
+              className="px-2 py-1 rounded-md text-[11px] font-semibold bg-emerald-600/80 hover:bg-emerald-600 text-white flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Wrench className="w-3 h-3" />
+              Fix
+            </button>
+          )}
+          <span className={`text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded border ${SEVERITY_STYLE[issue.severity]}`}>
+            {issue.severity}
+          </span>
+        </div>
       </div>
-      <span className={`text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded border shrink-0 ${SEVERITY_STYLE[issue.severity]}`}>
-        {issue.severity}
-      </span>
+      {issue.commands.length > 0 && (
+        <div className="space-y-1">
+          {issue.commands.map((c, i) => (
+            <CommandLine key={i} cmd={c} />
+          ))}
+        </div>
+      )}
+      {fixer.available && !issue.fix && runnable && (
+        <p className="text-[10px] text-neutral-500">Run this yourself: {copyOnlyReason(issue, profile)}</p>
+      )}
     </div>
-    {issue.commands.length > 0 && (
-      <div className="space-y-1">
-        {issue.commands.map((c, i) => (
-          <CommandLine key={i} cmd={c} />
-        ))}
-      </div>
-    )}
-  </div>
-);
+  );
+};
 
 interface StackFreshnessPanelProps {
   report: StackFreshnessReport;
   profile: DetectedStackProfile;
   checking?: boolean;
   onRecheck?: () => void;
+  /** Absolute project folder; enables the Fix button (desktop app only). */
+  projectRoot?: string;
 }
 
 /** "Will this project still run?": issues grouped by how much they block, with copyable fixes. */
-export const StackFreshnessPanel: React.FC<StackFreshnessPanelProps> = ({ report, profile, checking, onRecheck }) => {
+export const StackFreshnessPanel: React.FC<StackFreshnessPanelProps> = ({ report, profile, checking, onRecheck, projectRoot }) => {
   const tiers: FreshnessIssue['tier'][] = ['platform', 'library', 'tooling'];
   const apps = profile.apps || [];
   return (
@@ -175,7 +212,7 @@ export const StackFreshnessPanel: React.FC<StackFreshnessPanelProps> = ({ report
                 )}
               </div>
               {list.map((issue) => (
-                <FreshnessIssueRow key={issue.id} issue={issue} />
+                <FreshnessIssueRow key={issue.id} issue={issue} projectRoot={projectRoot} profile={profile} />
               ))}
             </div>
           );

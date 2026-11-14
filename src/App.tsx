@@ -15,6 +15,8 @@ import { GlobalTaskRolodex } from './components/tasks/GlobalTaskRolodex';
 import { KnowledgeGraph } from './components/graph/KnowledgeGraph';
 import { ProjectDashboard } from './components/project/ProjectDashboard';
 import { PortfolioView } from './components/project/PortfolioView';
+import { FixProvider } from './components/project/fix/FixProvider';
+import { assessStackFreshness } from './services/stackFreshness';
 import { DocActionModal } from './components/project/DocActionModal';
 import { DetectedStackProfile, PortfolioProjectSummary } from './types/docAudit';
 import { inspectProjectStack, checkLiveStackVersions } from './services/stackInspector';
@@ -771,9 +773,24 @@ const AppContent: React.FC = () => {
   const [rescanningProjectRoot, setRescanningProjectRoot] = useState<string | null>(null);
   const handleRescanPortfolioProject = async (rootPath: string) => {
     if (rootPath === workspace.rootPath) {
-      handleRefreshProject();
+      await handleRefreshProject(true);
       return;
     }
+    await rescanPortfolioEntry(rootPath);
+  };
+
+  // After a stack fix (or its undo): rescan the open project and its portfolio card, with live registry data.
+  const handleStackFixed = async (rootPath: string) => {
+    if (rootPath === workspace.rootPath) await handleRefreshProject(true);
+    if (portfolioProjects.some((e) => e.workspace.rootPath === rootPath)) await rescanPortfolioEntry(rootPath);
+  };
+
+  const getFreshnessReport = (rootPath: string) => {
+    const entry = portfolioProjects.find((e) => e.workspace.rootPath === rootPath);
+    return entry ? assessStackFreshness(entry.auditReport.stackProfile) : undefined;
+  };
+
+  const rescanPortfolioEntry = async (rootPath: string) => {
     setRescanningProjectRoot(rootPath);
     try {
       const fresh = await ProjectScannerService.scanPath(rootPath, { watch: false });
@@ -1267,6 +1284,7 @@ const AppContent: React.FC = () => {
     workspace.isLocalFolder && workspace.kind !== 'notes' ? parentFolderOf(workspace.rootPath) : null;
 
   return (
+    <FixProvider onFixed={handleStackFixed} getReport={getFreshnessReport}>
     <div className={`flex h-screen w-screen bg-[#161618] text-neutral-200 overflow-hidden font-sans ${theme}`}>
       {/* Resizable Notion Sidebar */}
       <Sidebar
@@ -1534,6 +1552,7 @@ const AppContent: React.FC = () => {
         />
       )}
     </div>
+    </FixProvider>
   );
 };
 
