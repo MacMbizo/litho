@@ -170,3 +170,79 @@ test('findSdkVersionLine points at sdkVersion in app.config code', () => {
   assert.deepStrictEqual(findSdkVersionLine("export default {\n  sdkVersion: '50.0.0',\n}"), { line: 2, value: '50.0.0' });
   assert.strictEqual(findSdkVersionLine('export default {}'), null);
 });
+
+// --- Task 3: git helpers (real git in temp repos) --------------------------
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { gitState, checkpoint, restoreFiles, commitFiles, statusMap } from '../electron/fixGit.ts';
+
+function tempDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'litho-fix-'));
+}
+
+function tempRepo(): string {
+  const dir = tempDir();
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+  git('init', '-q');
+  git('config', 'user.name', 'Fixer Test');
+  git('config', 'user.email', 'fixer@example.invalid');
+  git('config', 'core.autocrlf', 'false');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'one\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
+  return dir;
+}
+
+const lastMessage = (dir: string) => execFileSync('git', ['log', '-1', '--format=%s'], { cwd: dir }).toString().trim();
+
+test('gitState: null outside a repo, clean state with a head inside one', async () => {
+  assert.strictEqual(await gitState(tempDir()), null);
+  const repo = tempRepo();
+  const s = (await gitState(repo))!;
+  assert.strictEqual(s.dirty.size, 0);
+  assert.match(s.head, /^[0-9a-f]{40}$/);
+  assert.strictEqual(path.resolve(s.repoRoot).toLowerCase(), fs.realpathSync(repo).toLowerCase());
+});
+
+test('checkpoint commits every change, untracked included', async () => {
+  const repo = tempRepo();
+  fs.writeFileSync(path.join(repo, 'new.txt'), 'x');
+  const before = (await gitState(repo))!.head;
+  const head = await checkpoint(repo);
+  assert.notStrictEqual(head, before);
+  assert.strictEqual(lastMessage(repo), 'chore: checkpoint before DocAtlas fix');
+  assert.strictEqual((await statusMap(repo)).size, 0);
+});
+
+test('checkpoint rejects when a pre-commit hook fails', async () => {
+  const repo = tempRepo();
+  fs.writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n');
+  fs.chmodSync(path.join(repo, '.git', 'hooks', 'pre-commit'), 0o755);
+  fs.writeFileSync(path.join(repo, 'new.txt'), 'x');
+  await assert.rejects(() => checkpoint(repo));
+});
+
+test('restoreFiles puts back modified files and deletes files the fix created', async () => {
+  const repo = tempRepo();
+  const head = (await gitState(repo))!.head;
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'changed\n');
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'new\n');
+  const restored = await restoreFiles(repo, head, [
+    { path: 'a.txt', status: 'modified' },
+    { path: 'b.txt', status: 'untracked' },
+  ]);
+  assert.deepStrictEqual(restored.sort(), ['a.txt', 'b.txt']);
+  assert.strictEqual(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'one\n');
+  assert.strictEqual(fs.existsSync(path.join(repo, 'b.txt')), false);
+});
+
+test('commitFiles commits only the files given', async () => {
+  const repo = tempRepo();
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'changed\n');
+  fs.writeFileSync(path.join(repo, 'other.txt'), 'leave me\n');
+  await commitFiles(repo, ['a.txt'], 'chore(deps): test fix');
+  assert.strictEqual(lastMessage(repo), 'chore(deps): test fix');
+  assert.deepStrictEqual([...(await statusMap(repo)).keys()], ['other.txt']);
+});
