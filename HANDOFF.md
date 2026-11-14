@@ -37,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (44) | `npm test` |
+| Unit tests (69) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -146,25 +146,53 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 - **Deferred minors from the final review of the Litho brand work:**
   - The sidebar tile falls back to "N" when there's no workspace (never shown in practice).
   - Packaging must include `assets/brand/build` and set the builder `icon`.
-  - The userData pin ignores `--user-data-dir`; guard it with `app.commandLine.hasSwitch`.
   - No test pins "sizes up to 32 px come from litho-small.svg".
   - `tests/brand.test.ts` resolves paths from the working directory.
   - The DocAtlas mark at 16 px has no small variant.
   - Stale comment "Notion aesthetic" in `index.html`.
 - **Pending owner decision:** packaging and installer (electron-builder) plus the "Open with Litho" `.md` association. The app side (argv plus single-instance) is done.
 
-## In progress: brainstorm, awaiting the owner's choice of order (2026-11-14)
+## Safe stack fixer (built 2026-11-14, branch `feat/stack-fixer`)
 
-The owner wants AI personas, cheaper AI ("Ollama reads, Claude/Gemini thinks"), design docs generated from a PRD, and stack fixes that also update `app.json`/`app.config.*` and can run commands from DocAtlas. Claude proposed **three separate projects** and asked the owner which order: 1 → 2 → 3, or AI first.
+The owner chose the order **1 stack fixer → 2 AI foundation → 3 design suite**. Project 1 is built. Design: `docs/superpowers/specs/2026-11-14-safe-stack-fixer-design.md`. Plan: `docs/superpowers/plans/2026-11-14-safe-stack-fixer.md`.
 
-1. **Safe stack fixer.**
-   - Run only DocAtlas-generated upgrade commands, never a free shell, and only after a confirmation sheet showing the command and folder.
-   - Offer a checkpoint commit first, or warn about a dirty tree.
-   - Stream output live, with a Stop button.
-   - Afterwards: run `npx expo-doctor`, rescan, and show the changed files.
-   - Propose a config diff for approval. Expo's docs say to remove `expo.sdkVersion` or keep it matching `package.json`. `expo install --fix` doesn't change it.
-   - For `app.config.ts`/`.js`, point at the line instead of rewriting it.
-   - Commands come from `buildUpgradeGuidance` in `src/services/stackInspector.ts` (around line 200). **Today DocAtlas only shows them as text and never edits config.**
+- **What it does:**
+  - Freshness issues get a **Fix** button (portfolio drawer and Project Overview, desktop only).
+  - A confirm sheet shows the exact commands, the folder and the git state.
+  - Output streams live, with Stop and a minimize chip.
+  - The result screen shows: steps, expo-doctor, changed files, an Expo `sdkVersion` proposal (Apply/Skip for JSON, Open file for `app.config.ts/js`), freshness before → after, **Continue to SDK N+1**, **Commit this fix**, **Undo** and **Open log**.
+- **Safety:** the renderer sends only a typed `FixRecipe`. Main re-validates it (`validateRecipe`), checks the project is known (scanned this session or in the portfolio snapshot) and that the folder's realpath is inside it, then builds the argv itself. On Windows it runs `cmd.exe /d /s /c` with tokens quoted by `quoteWinArg`; `"`, `%`, `!` and newlines are refused. Only one fix runs at a time, and closing the window stops it.
+- **Can run:**
+  - Expo SDK one step at a time (`npx expo install expo@^N+1.0.0 --fix`, then the check `npx expo-doctor`)
+  - Expo alignment / react-native (`npx expo install --fix`)
+  - npm package upgrades via the project's package manager: npm, pnpm, yarn or bun, detected from `packageManager` or the lockfile; dev dependencies get `-D`
+  - missing installs
+- **Copy-only, with a reason shown:** Node/Python runtimes (machine-wide), `next` (the codemod asks questions), PyPI packages (pip vs uv unknown).
+- **Git:**
+  - A dirty tree offers **Commit them first** (ticked by default), with the message `chore: checkpoint before DocAtlas fix`.
+  - Undo restores only the files the fix changed, from the start commit, and deletes files it created. It never touches `node_modules`, so after undo DocAtlas still sees the newer installed version until you reinstall.
+  - Commit message: `chore(deps): <issue title>`.
+- **Logs:** `userData/docatlas/fix-logs/`, the newest 50 kept.
+- **Code:**
+  - `src/services/fixRecipes.ts`: pure, tested.
+  - `electron/fixGit.ts` and `electron/fixRunner.ts`: Node only, tested; `FixController`.
+  - IPC `fix:*` in `electron/main.ts`.
+  - `src/components/project/fix/FixProvider.tsx` and `FixSheet.tsx`.
+  - Recipes are attached to issues in `assessStackFreshness` (`FreshnessIssue.fix`).
+- **Also changed:** `--user-data-dir` now overrides the userData pin (this was a deferred minor). E2E tests use it to run with isolated state; setting `APPDATA` does **not** work for this.
+- **Verified:**
+  - 69 unit tests, including real git temp repos and real `cmd.exe` runs.
+  - Typecheck and build clean.
+  - Electron e2e with isolated userData on a throwaway `hono@3` fixture, 18/18 passing: Fix shown, exact command, live log, changed files, freshness 95 → 100, undo, checkpoint commit, minimize chip, second Fix disabled, Stop, no stray npm process, no console errors.
+- **Not verified:**
+  - A real Expo SDK step, and the `sdkVersion` proposal UI end-to-end (Expo is a large download; covered only by unit tests). Next: try on a copy of `C1/mobile` with the owner's OK.
+  - Light theme.
+  - Continue to SDK N+1 (needs a real Expo run).
+- **Note:** DocAtlas tracks only the main framework packages (`TRACKED_NPM_PACKAGES`), so a tiny package like `is-number` never gets an issue or a Fix.
+
+## Next: AI foundation (project 2), then design suite (project 3)
+
+1. ~~Safe stack fixer~~: done, see above.
 2. **AI foundation.**
    - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
    - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.

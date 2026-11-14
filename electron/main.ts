@@ -11,7 +11,10 @@ app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAcce
 // localStorage) lives in the folder Electron derived from the original package name. Pin it so renaming
 // the package or adding a productName for packaging can never silently start the app with empty state.
 // Must run before anything reads userData, including the single-instance lock below.
-app.setPath('userData', path.join(app.getPath('appData'), 'notion-markdown-studio'));
+// An explicit --user-data-dir (used by end-to-end tests to run with isolated state) still wins.
+if (!app.commandLine.hasSwitch('user-data-dir')) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'notion-markdown-studio'));
+}
 
 let mainWindow: BrowserWindow | null = null;
 let activeWatcher: fs.FSWatcher | null = null;
