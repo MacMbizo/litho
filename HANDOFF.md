@@ -24,7 +24,7 @@ _Last updated 2026-11-14. Branch `main`, pushed to https://github.com/MacMbizo/l
 
 ## What this is
 
-Local-first Electron + React + Vite app (`C:\Prj\newdoc`). **DocAtlas** is the feature being built: it audits every project under one or more root folders (normally `C:\Prj`) for:
+Local-first Electron + React + Vite app (`C:\Prj\litho`, renamed from `C:\Prj\newdoc` on 2026-11-14). **DocAtlas** is the feature being built: it audits every project under one or more root folders (normally `C:\Prj`) for:
 
 - **Doc health:** per-doc states (canonical, healthy, module-doc, stale, duplicate, deprecated, orphan, agent-system), an A–D grade and fix-it actions.
 - **Stack freshness:** whether each project still runs. It checks Expo SDK, frameworks, Node/Python end-of-life and Expo package alignment against live npm/PyPI.
@@ -139,7 +139,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 - **Phone width:** the existing fixed sidebar fills the screen. Not a target, since the Electron window's minimum width is 960px.
 - **Unchecked claim:** "store Expo Go only runs the newest SDK" comes from memory, not from Expo's docs.
 - **App state:** portfolio root `C:\Prj`, snapshot saved, last workspace `C:\Prj\F4` (e2e runs restore it). No project files were modified by tests.
-- **Taskbar icon not seen:** the screen capture came back blank. The `.ico` is valid and passed to the window, so the owner should glance at the taskbar on the next launch.
+- **Taskbar identity (fixed 2026-11-14):** pinning used to show the Electron icon because the unpackaged app runs as `electron.exe`. `electron/main.ts` now sets `app.setAppUserModelId('com.litho.app')` and `win.setAppDetails` (Litho icon, name, relaunch `"<electron.exe>" "<app path>"`). These were read back from the live window's property store. Paths are computed at runtime, so after moving or renaming the folder, unpin and re-pin from the running window.
 - **A note nobody can account for:** `Documents\DocAtlas Notes\Note 2026-11-13 2231.md` (empty default) wasn't made by a test. It may be the owner's, so it was left alone.
 - **Invalid frontmatter:** 15 real docs have invalid YAML frontmatter; this could be surfaced as an audit issue.
 - **`.agents/`** is untracked: an editor-generated paperRock MCP config, with local paths only and no secrets. The owner decides whether to gitignore it.

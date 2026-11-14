@@ -16,6 +16,12 @@ if (!app.commandLine.hasSwitch('user-data-dir')) {
   app.setPath('userData', path.join(app.getPath('appData'), 'notion-markdown-studio'));
 }
 
+// Windows taskbar identity. Run unpackaged, the process is electron.exe, so without this Windows groups
+// the window as "Electron" and a pin relaunches bare electron.exe with the Electron icon.
+const APP_USER_MODEL_ID = 'com.litho.app';
+const APP_ICON_PATH = path.join(__dirname, '../assets/brand/build', process.platform === 'win32' ? 'litho.ico' : 'litho-256.png');
+if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
+
 let mainWindow: BrowserWindow | null = null;
 let activeWatcher: fs.FSWatcher | null = null;
 
@@ -115,7 +121,7 @@ function createWindow() {
     minHeight: 640,
     center: true,
     title: 'Litho',
-    icon: path.join(__dirname, '../assets/brand/build', process.platform === 'win32' ? 'litho.ico' : 'litho-256.png'),
+    icon: APP_ICON_PATH,
     backgroundColor: '#191919',
     show: true,
     webPreferences: {
@@ -124,6 +130,18 @@ function createWindow() {
       contextIsolation: true,
     },
   });
+
+  // What a taskbar pin stores: Litho's icon, name and a relaunch of this app (not bare electron.exe).
+  // Paths are computed at runtime, so renaming or moving the project folder only needs a re-pin.
+  if (process.platform === 'win32') {
+    mainWindow.setAppDetails({
+      appId: APP_USER_MODEL_ID,
+      appIconPath: APP_ICON_PATH,
+      appIconIndex: 0,
+      relaunchCommand: `"${process.execPath}" "${app.getAppPath()}"`,
+      relaunchDisplayName: 'Litho',
+    });
+  }
 
   const indexPath = path.join(__dirname, '../dist/index.html');
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
