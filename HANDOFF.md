@@ -37,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (69) | `npm test` |
+| Unit tests (74) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -181,13 +181,14 @@ The owner chose the order **1 stack fixer → 2 AI foundation → 3 design suite
   - Recipes are attached to issues in `assessStackFreshness` (`FreshnessIssue.fix`).
 - **Also changed:** `--user-data-dir` now overrides the userData pin (this was a deferred minor). E2E tests use it to run with isolated state; setting `APPDATA` does **not** work for this.
 - **Verified:**
-  - 69 unit tests, including real git temp repos and real `cmd.exe` runs.
+  - 74 unit tests, including real git temp repos and real `cmd.exe` runs. A fresh reviewer checked the whole branch; its Important findings were fixed (undo never touches files you had already edited, git stays inside the project folder, literal paths for `[id].tsx`, runs always end, Open file only reveals the file).
   - Typecheck and build clean.
   - Electron e2e with isolated userData on a throwaway `hono@3` fixture, 18/18 passing: Fix shown, exact command, live log, changed files, freshness 95 → 100, undo, checkpoint commit, minimize chip, second Fix disabled, Stop, no stray npm process, no console errors.
 - **Not verified:**
   - A real Expo SDK step, and the `sdkVersion` proposal UI end-to-end (Expo is a large download; covered only by unit tests). Next: try on a copy of `C1/mobile` with the owner's OK.
   - Light theme.
   - Continue to SDK N+1 (needs a real Expo run).
+- **Deferred minors from the review:** the checkpoint defaults on even if files became dirty after the sheet opened; a failed checkpoint leaves `git add -A` staged and Stop cannot cancel a running checkpoint; runId filtering relies on IPC ordering; `parsePorcelain` should use `-z`; child env could set `NoDefaultCurrentDirectoryInExePath` and ignore stdin; Stop on macOS/Linux leaves grandchildren; commit/apply are not locked during a run.
 - **Note:** DocAtlas tracks only the main framework packages (`TRACKED_NPM_PACKAGES`), so a tiny package like `is-number` never gets an issue or a Fix.
 
 ## Next: AI foundation (project 2), then design suite (project 3)
