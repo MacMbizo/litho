@@ -139,3 +139,34 @@ test('assessStackFreshness attaches a fix to the Expo issue but not to the runti
   const node = report.issues.find((i) => i.id.startsWith('runtime:'))!;
   assert.strictEqual(node.fix, undefined);
 });
+
+// --- Task 2: after-run helpers --------------------------------------------
+import { parsePorcelain, changedSince, removeSdkVersion, findSdkVersionLine } from '../src/services/fixRecipes.ts';
+
+test('parsePorcelain reads XY codes, untracked files and renames', () => {
+  const m = parsePorcelain(' M package.json\n?? new.txt\nR  a -> b\n');
+  assert.deepStrictEqual([...m.entries()], [['package.json', ' M'], ['new.txt', '??'], ['b', 'R ']]);
+});
+
+test('changedSince lists only what the fix changed, never node_modules', () => {
+  const before = parsePorcelain(' M already.ts\n M reverted.ts\n');
+  const after = parsePorcelain(' M already.ts\n M package.json\n?? fresh.txt\n?? node_modules/x/y.js\n D gone.ts\n');
+  assert.deepStrictEqual(changedSince(before, after), [
+    { path: 'package.json', status: 'modified' },
+    { path: 'fresh.txt', status: 'untracked' },
+    { path: 'gone.ts', status: 'deleted' },
+  ]);
+});
+
+test('removeSdkVersion drops a stale expo.sdkVersion and keeps formatting', () => {
+  assert.strictEqual(removeSdkVersion('{"expo":{"name":"a","sdkVersion":"50.0.0"}}', 51), '{"expo":{"name":"a"}}');
+  assert.strictEqual(removeSdkVersion('{"expo":{"name":"a"}}', 51), null);
+  assert.strictEqual(removeSdkVersion('{"expo":{"sdkVersion":"51.0.0"}}', 51), null);
+  const crlf = '{\r\n    "expo": {\r\n        "name": "a",\r\n        "sdkVersion": "50.0.0"\r\n    }\r\n}\r\n';
+  assert.strictEqual(removeSdkVersion(crlf, 51), '{\r\n    "expo": {\r\n        "name": "a"\r\n    }\r\n}\r\n');
+});
+
+test('findSdkVersionLine points at sdkVersion in app.config code', () => {
+  assert.deepStrictEqual(findSdkVersionLine("export default {\n  sdkVersion: '50.0.0',\n}"), { line: 2, value: '50.0.0' });
+  assert.strictEqual(findSdkVersionLine('export default {}'), null);
+});

@@ -173,3 +173,89 @@ export function quoteWinArg(arg: string): string {
 export function toCmdLine(argv: string[]): string {
   return `"${argv.map(quoteWinArg).join(' ')}"`;
 }
+
+// ---------------------------------------------------------------------------
+// After a run: what changed, and Expo config proposals
+// ---------------------------------------------------------------------------
+
+export interface ChangedFile {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'untracked';
+}
+
+/** `git status --porcelain` output → path → two-character XY code (renames keep the new path). */
+export function parsePorcelain(out: string): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const line of out.split(/\r?\n/)) {
+    if (line.length < 4) continue;
+    const code = line.slice(0, 2);
+    let p = line.slice(3);
+    const arrow = p.indexOf(' -> ');
+    if (arrow >= 0) p = p.slice(arrow + 4);
+    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+    m.set(p, code);
+  }
+  return m;
+}
+
+function statusOf(code: string): ChangedFile['status'] {
+  if (code === '??') return 'untracked';
+  if (code.includes('D')) return 'deleted';
+  if (code.includes('A')) return 'added';
+  return 'modified';
+}
+
+/** Files whose status the fix changed. Files dirty before with the same code, and node_modules, are left out. */
+export function changedSince(before: Map<string, string>, after: Map<string, string>): ChangedFile[] {
+  const out: ChangedFile[] = [];
+  for (const [p, code] of after) {
+    if (p === 'node_modules' || p.startsWith('node_modules/') || p.includes('/node_modules/')) continue;
+    if (before.get(p) === code) continue;
+    out.push({ path: p, status: statusOf(code) });
+  }
+  return out;
+}
+
+export type ConfigProposal =
+  | { kind: 'json-remove-sdk'; file: string; before: string; after: string; current: string; expected: number }
+  | { kind: 'code-line'; file: string; line: number; current: string; expected: number };
+
+function majorOf(v: string): number | null {
+  const m = v.match(/(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Remove a stale `expo.sdkVersion` from app.json (Expo: remove it, or keep it matching package.json).
+ * Returns the new text, keeping indent and line endings, or null when nothing should change.
+ */
+export function removeSdkVersion(jsonText: string, expectedMajor: number): string | null {
+  let obj: any;
+  try {
+    obj = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object') return null;
+  const holder = obj.expo && typeof obj.expo === 'object' ? obj.expo : obj;
+  const current = holder.sdkVersion;
+  if (typeof current !== 'string' || majorOf(current) === expectedMajor) return null;
+  delete holder.sdkVersion;
+  const indentMatch = jsonText.match(/\n([ \t]+)\S/);
+  const indent = indentMatch ? indentMatch[1] : 0;
+  const eol = jsonText.includes('\r\n') ? '\r\n' : '\n';
+  let out = JSON.stringify(obj, null, indent || undefined);
+  if (eol === '\r\n') out = out.replace(/\n/g, '\r\n');
+  if (/\r?\n$/.test(jsonText)) out += eol;
+  return out;
+}
+
+/** Line (1-based) and value of `sdkVersion` in app.config.ts/js code, for pointing at it rather than rewriting. */
+export function findSdkVersionLine(code: string): { line: number; value: string } | null {
+  const lines = code.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/sdkVersion\s*:\s*['"`]([^'"`]+)['"`]/);
+    if (m) return { line: i + 1, value: m[1] };
+  }
+  return null;
+}
