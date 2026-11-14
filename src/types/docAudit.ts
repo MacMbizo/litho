@@ -1,4 +1,6 @@
 import type { ProjectWorkspace } from './document';
+import type { FixRecipe } from '../services/fixRecipes';
+export type { FixRecipe };
 
 export type DocTaxonomyStatus =
   | 'canonical'
@@ -131,6 +133,8 @@ export interface FreshnessIssue {
   title: string;
   detail: string;
   commands: string[];
+  /** Set when DocAtlas can run the fix itself (after confirmation); copy-only issues leave it unset. */
+  fix?: FixRecipe;
 }
 
 export interface StackFreshnessReport {

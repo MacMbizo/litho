@@ -1,0 +1,141 @@
+import assert from 'node:assert';
+import test from 'node:test';
+import {
+  validateRecipe,
+  recipeForDependency,
+  detectPackageManager,
+  buildSteps,
+  quoteWinArg,
+  toCmdLine,
+  type AppContext,
+} from '../src/services/fixRecipes.ts';
+import { assessStackFreshness } from '../src/services/stackFreshness.ts';
+import type { StackDependencyStatus, DetectedStackProfile } from '../src/types/docAudit.ts';
+
+const NOW = Date.UTC(2026, 10, 14);
+
+function dep(over: Partial<StackDependencyStatus>): StackDependencyStatus {
+  return {
+    name: 'x',
+    ecosystem: 'npm',
+    sourceFile: 'package.json',
+    currentVersion: '^1.0.0',
+    currentMajor: 1,
+    appPath: '',
+    severity: 'outdated',
+    upgradeCommands: [],
+    notes: '',
+    ...over,
+  };
+}
+
+const npmCtx = (dev: string[] = []): ((p: string) => AppContext) => () => ({ pm: 'npm', devDeps: new Set(dev) });
+
+// --- validateRecipe -------------------------------------------------------
+
+test('validateRecipe accepts a one-SDK Expo step', () => {
+  const r = validateRecipe({ kind: 'expo-sdk-step', appPath: 'mobile', fromMajor: 50, toMajor: 51 });
+  assert.strictEqual(r.kind, 'expo-sdk-step');
+});
+
+test('validateRecipe refuses paths outside the project, multi-SDK jumps and bad names/ranges', () => {
+  const bad: unknown[] = [
+    { kind: 'expo-align', appPath: '../x' },
+    { kind: 'expo-align', appPath: 'C:\\x' },
+    { kind: 'expo-align', appPath: '/x' },
+    { kind: 'expo-sdk-step', appPath: '', fromMajor: 50, toMajor: 52 },
+    { kind: 'pkg-upgrade', packages: [{ appPath: '', name: 'a b', range: '^1.0.0' }] },
+    { kind: 'pkg-upgrade', packages: [{ appPath: '', name: 'react', range: 'latest' }] },
+    { kind: 'pkg-upgrade', packages: [] },
+    { kind: 'rm-rf', appPath: '' },
+    null,
+  ];
+  for (const r of bad) assert.throws(() => validateRecipe(r), /Invalid fix/, JSON.stringify(r));
+});
+
+// --- recipeForDependency --------------------------------------------------
+
+test('recipeForDependency: Expo moves one SDK, RN aligns, next/pypi/current are copy-only', () => {
+  assert.deepStrictEqual(recipeForDependency(dep({ name: 'expo', currentMajor: 50, latestMajor: 54, latestVersion: '54.0.1', appPath: 'mobile', severity: 'critical' })), {
+    kind: 'expo-sdk-step',
+    appPath: 'mobile',
+    fromMajor: 50,
+    toMajor: 51,
+  });
+  assert.deepStrictEqual(recipeForDependency(dep({ name: 'react-native', appPath: 'mobile' })), { kind: 'expo-align', appPath: 'mobile' });
+  assert.strictEqual(recipeForDependency(dep({ name: 'next', latestMajor: 16, latestVersion: '16.0.0' })), null);
+  assert.strictEqual(recipeForDependency(dep({ name: 'django', ecosystem: 'pypi', latestMajor: 6, latestVersion: '6.0' })), null);
+  assert.strictEqual(recipeForDependency(dep({ name: 'typescript', severity: 'current', latestMajor: 1, latestVersion: '1.0.0' })), null);
+});
+
+test('recipeForDependency: npm majors get ^N.0.0, minors get ^latest', () => {
+  assert.deepStrictEqual(recipeForDependency(dep({ name: 'typescript', currentMajor: 5, majorBehind: 1, latestMajor: 6, latestVersion: '6.0.2' })), {
+    kind: 'pkg-upgrade',
+    packages: [{ appPath: '', name: 'typescript', range: '^6.0.0' }],
+  });
+  assert.deepStrictEqual(recipeForDependency(dep({ name: 'zod', severity: 'minor', currentMajor: 5, majorBehind: 0, latestMajor: 5, latestVersion: '5.4.2' })), {
+    kind: 'pkg-upgrade',
+    packages: [{ appPath: '', name: 'zod', range: '^5.4.2' }],
+  });
+});
+
+// --- detectPackageManager -------------------------------------------------
+
+test('detectPackageManager: packageManager field, then lockfile, else npm', () => {
+  assert.strictEqual(detectPackageManager('pnpm@9.1.0', []), 'pnpm');
+  assert.strictEqual(detectPackageManager(undefined, ['yarn.lock']), 'yarn');
+  assert.strictEqual(detectPackageManager(undefined, ['bun.lock']), 'bun');
+  assert.strictEqual(detectPackageManager(undefined, ['bun.lockb']), 'bun');
+  assert.strictEqual(detectPackageManager(undefined, ['package.json']), 'npm');
+});
+
+// --- buildSteps -----------------------------------------------------------
+
+test('buildSteps: Expo step installs the next SDK then checks with expo-doctor', () => {
+  const steps = buildSteps({ kind: 'expo-sdk-step', appPath: 'mobile', fromMajor: 50, toMajor: 51 }, npmCtx());
+  assert.deepStrictEqual(steps.map((s) => [s.argv, s.isCheck, s.appPath]), [
+    [['npx', 'expo', 'install', 'expo@^51.0.0', '--fix'], false, 'mobile'],
+    [['npx', 'expo-doctor'], true, 'mobile'],
+  ]);
+});
+
+test('buildSteps: package upgrades split dev and prod, per package manager', () => {
+  const r = { kind: 'pkg-upgrade' as const, packages: [{ appPath: '', name: 'electron', range: '^39.0.0' }, { appPath: '', name: 'react', range: '^19.2.0' }] };
+  assert.deepStrictEqual(buildSteps(r, npmCtx(['electron'])).map((s) => s.argv), [
+    ['npm', 'install', '-D', 'electron@^39.0.0'],
+    ['npm', 'install', 'react@^19.2.0'],
+  ]);
+  assert.deepStrictEqual(buildSteps(r, () => ({ pm: 'pnpm', devDeps: new Set(['electron']) }))[0].argv, ['pnpm', 'add', '-D', 'electron@^39.0.0']);
+  assert.deepStrictEqual(buildSteps(r, () => ({ pm: 'bun', devDeps: new Set(['electron']) }))[0].argv, ['bun', 'add', '-d', 'electron@^39.0.0']);
+  assert.deepStrictEqual(buildSteps({ kind: 'install', appPath: '' }, () => ({ pm: 'yarn', devDeps: new Set() }))[0].argv, ['yarn', 'install']);
+});
+
+// --- Windows command line -------------------------------------------------
+
+test('quoteWinArg quotes cmd metacharacters and refuses expansion characters', () => {
+  assert.strictEqual(quoteWinArg('npx'), 'npx');
+  assert.strictEqual(quoteWinArg('expo@^51.0.0'), '"expo@^51.0.0"');
+  for (const bad of ['a"b', '%PATH%', 'a!b', 'a\nb']) assert.throws(() => quoteWinArg(bad), bad);
+});
+
+test('toCmdLine wraps the whole line for cmd /s /c', () => {
+  assert.strictEqual(toCmdLine(['npx', 'expo', 'install', 'expo@^51.0.0', '--fix']), '"npx expo install "expo@^51.0.0" --fix"');
+});
+
+// --- recipes attached to freshness issues ---------------------------------
+
+test('assessStackFreshness attaches a fix to the Expo issue but not to the runtime issue', () => {
+  const profile = {
+    frameworks: ['Expo'],
+    scripts: {},
+    dependencies: [dep({ name: 'expo', currentMajor: 50, currentVersion: '^50.0.0', latestMajor: 54, latestVersion: '54.0.1', majorBehind: 4, appPath: 'mobile', severity: 'critical' })],
+    runtimes: [{ runtime: 'node', version: '18', major: 18, source: '.nvmrc', appPath: '', isMinimum: false, eolDate: '2025-04-30' }],
+    apps: [],
+    checkedLiveAt: new Date(NOW).toISOString(),
+  } as unknown as DetectedStackProfile;
+  const report = assessStackFreshness(profile, NOW);
+  const expo = report.issues.find((i) => i.id.startsWith('expo-sdk:'))!;
+  assert.strictEqual(expo.fix?.kind, 'expo-sdk-step');
+  const node = report.issues.find((i) => i.id.startsWith('runtime:'))!;
+  assert.strictEqual(node.fix, undefined);
+});

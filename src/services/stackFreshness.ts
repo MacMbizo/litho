@@ -5,6 +5,7 @@ import type {
   StackFreshnessReport,
 } from '../types/docAudit';
 import { currentNodeLts, inApp, newestPythonMinor } from './stackInspector';
+import { recipeForDependency, type FixRecipe } from './fixRecipes';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Points lost per issue. Platform problems stop an app from running; tooling only slows development. */
@@ -21,6 +22,15 @@ export function tierOf(name: string): FreshnessIssue['tier'] {
   if (PLATFORM_PACKAGES.has(name)) return 'platform';
   if (TOOLING_PACKAGES.has(name)) return 'tooling';
   return 'library';
+}
+
+/** One runnable upgrade for a batch of minor releases; undefined when none of them can be run. */
+function mergeUpgrades(deps: Parameters<typeof recipeForDependency>[0][]): FixRecipe | undefined {
+  const packages = deps.flatMap((d) => {
+    const r = recipeForDependency(d);
+    return r && r.kind === 'pkg-upgrade' ? r.packages : [];
+  });
+  return packages.length > 0 ? { kind: 'pkg-upgrade', packages } : undefined;
 }
 
 export function issueWeight(i: Pick<FreshnessIssue, 'tier' | 'severity'>): number {
@@ -61,6 +71,7 @@ export function assessStackFreshness(profile: DetectedStackProfile, nowMs: numbe
       title: `Expo SDK ${d.currentMajor} → ${d.latestMajor}${where(d.appPath || '')}`,
       detail: d.notes + ships,
       commands: d.upgradeCommands,
+      fix: recipeForDependency(d) ?? undefined,
     });
   }
 
@@ -82,6 +93,7 @@ export function assessStackFreshness(profile: DetectedStackProfile, nowMs: numbe
       title: `${list.length} package${list.length === 1 ? ' doesn’t' : 's don’t'} match Expo SDK ${list[0].sdkMajor}${where(appPath)}`,
       detail: `Versions differ from what the SDK was tested with, a common cause of build or runtime crashes: ${shown}${list.length > 6 ? `, +${list.length - 6} more` : ''}.`,
       commands: [inApp(appPath, 'npx expo install --fix'), inApp(appPath, 'npx expo-doctor')],
+      fix: { kind: 'expo-align', appPath },
     });
   }
 
@@ -140,6 +152,7 @@ export function assessStackFreshness(profile: DetectedStackProfile, nowMs: numbe
       title: `${d.name} ${current.replace(/^[~^]/, '')} → ${d.latestVersion}${where(d.appPath || '')}`,
       detail: d.notes,
       commands: d.upgradeCommands,
+      fix: recipeForDependency(d) ?? undefined,
     });
   }
   const minorDeps = deps.filter((d) => d.severity === 'minor' && !(profile.expoAlignment || []).some((a) => a.packageName === d.name && a.appPath === (d.appPath || '')));
@@ -152,6 +165,7 @@ export function assessStackFreshness(profile: DetectedStackProfile, nowMs: numbe
       title: `${minorDeps.length} package${minorDeps.length === 1 ? ' has' : 's have'} newer minor releases`,
       detail: minorDeps.map((d) => `${d.name}${d.appPath ? ` (${d.appPath}/)` : ''} → ${d.latestVersion}`).join(', '),
       commands: minorDeps.flatMap((d) => d.upgradeCommands).slice(0, 6),
+      fix: mergeUpgrades(minorDeps),
     });
   }
 
@@ -167,6 +181,7 @@ export function assessStackFreshness(profile: DetectedStackProfile, nowMs: numbe
       title: `Dependencies not installed${where(app.path)}`,
       detail: `${app.path || 'The project root'} has a package.json but no node_modules folder, so it won't start until you install.`,
       commands: [inApp(app.path, `${pm} install`)],
+      fix: { kind: 'install', appPath: app.path },
     });
   }
 
