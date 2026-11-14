@@ -1,6 +1,8 @@
 import { MarkdownFile, FileTreeNode, ProjectWorkspace } from '../types/document';
 import { MarkdownService } from './markdown';
 import { archivePathFor, rewriteRelativeLinksForMove } from './docRemediation';
+import type { FixRecipe } from './fixRecipes';
+import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
 declare global {
   interface Window {
@@ -42,6 +44,15 @@ declare global {
       fetchJson: (url: string) => Promise<any>;
       storeRead?: (name: string) => Promise<any>;
       storeWrite?: (name: string, data: unknown) => Promise<boolean>;
+      fixPlan?: (projectRoot: string, recipe: FixRecipe, title: string) => Promise<FixPlan>;
+      fixRun?: (planId: string, opts: { checkpoint: boolean }) => Promise<{ runId: string }>;
+      fixStop?: (runId: string) => Promise<void>;
+      fixApplyConfig?: (runId: string, index: number) => Promise<boolean>;
+      fixCommit?: (runId: string) => Promise<string>;
+      fixUndo?: (runId: string) => Promise<string[]>;
+      fixOpenFile?: (runId: string, file: string) => Promise<boolean>;
+      fixOpenLog?: (runId: string) => Promise<boolean>;
+      onFixEvent?: (callback: (e: FixEvent) => void) => () => void;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }

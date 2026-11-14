@@ -246,3 +246,95 @@ test('commitFiles commits only the files given', async () => {
   assert.strictEqual(lastMessage(repo), 'chore(deps): test fix');
   assert.deepStrictEqual([...(await statusMap(repo)).keys()], ['other.txt']);
 });
+
+// --- Task 4: runner ---------------------------------------------------------
+import { runSteps, type FixEvent } from '../electron/fixRunner.ts';
+
+const win = { skip: process.platform !== 'win32' };
+
+async function collect(steps: { argv: string[]; cwd: string; isCheck: boolean }[]) {
+  const events: FixEvent[] = [];
+  const res = await runSteps(steps, (e) => events.push(e), 'run-test', { stopped: false });
+  const out = events.filter((e) => e.type === 'output').map((e) => (e as any).text).join('');
+  return { res, events, out };
+}
+
+test('runSteps runs steps in order and streams output', win, async () => {
+  const cwd = tempDir();
+  const { res, out } = await collect([
+    { argv: ['node', '-e', 'process.exit(0)'], cwd, isCheck: false },
+    { argv: ['node', '-e', 'console.log(4242)'], cwd, isCheck: false },
+  ]);
+  assert.deepStrictEqual(res.exitCodes, [0, 0]);
+  assert.strictEqual(res.failedStep, undefined);
+  assert.match(out, /4242/);
+});
+
+test('runSteps stops at a failing step and never starts the next', win, async () => {
+  const cwd = tempDir();
+  const { res, events } = await collect([
+    { argv: ['node', '-e', 'process.exit(3)'], cwd, isCheck: false },
+    { argv: ['node', '-e', 'console.log(1)'], cwd, isCheck: false },
+  ]);
+  assert.strictEqual(res.failedStep, 0);
+  assert.deepStrictEqual(res.exitCodes, [3, null]);
+  assert.ok(!events.some((e) => e.type === 'step' && e.index === 1));
+});
+
+test('runSteps: a failing check is reported but does not fail the fix', win, async () => {
+  const { res } = await collect([{ argv: ['node', '-e', 'process.exit(1)'], cwd: tempDir(), isCheck: true }]);
+  assert.deepStrictEqual(res.exitCodes, [1]);
+  assert.strictEqual(res.failedStep, undefined);
+});
+
+test('runSteps runs in a folder with spaces and brackets', win, async () => {
+  const cwd = path.join(tempDir(), 'My App (old)');
+  fs.mkdirSync(cwd);
+  const { res, out } = await collect([{ argv: ['node', '-e', 'console.log(process.cwd())'], cwd, isCheck: false }]);
+  assert.deepStrictEqual(res.exitCodes, [0]);
+  assert.ok(out.includes('My App (old)'), out);
+});
+
+import { FixController } from '../electron/fixRunner.ts';
+
+function controller(known: string[], events: FixEvent[]) {
+  const set = new Set(known.map((k) => path.resolve(k).toLowerCase()));
+  return new FixController({
+    logDir: path.join(tempDir(), 'logs'),
+    isKnownRoot: async (r) => set.has(path.resolve(r).toLowerCase()),
+    emit: (e) => events.push(e),
+  });
+}
+
+async function waitForEnd(events: FixEvent[]) {
+  for (let i = 0; i < 200; i++) {
+    const end = events.find((e) => e.type === 'end');
+    if (end) return (end as Extract<FixEvent, { type: 'end' }>).result;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error('fix never ended');
+}
+
+test('FixController refuses projects it does not know and folders outside the project', async () => {
+  const repo = tempRepo();
+  const c = controller([repo], []);
+  await assert.rejects(() => c.plan(tempDir(), { kind: 'install', appPath: '' }, 'x'), /Unknown project/);
+  await assert.rejects(() => c.plan(repo, { kind: 'install', appPath: '../elsewhere' }, 'x'), /Invalid fix/);
+  await assert.rejects(() => c.plan(repo, { kind: 'install', appPath: 'missing' }, 'x'), /Folder not found/);
+});
+
+test('FixController: a failed checkpoint commit runs nothing', async () => {
+  const repo = tempRepo();
+  fs.writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n');
+  fs.writeFileSync(path.join(repo, 'dirty.txt'), 'x');
+  const events: FixEvent[] = [];
+  const c = controller([repo], events);
+  const plan = await c.plan(repo, { kind: 'install', appPath: '' }, 'Install');
+  assert.strictEqual(plan.git?.dirtyCount, 1);
+  await c.run(plan.planId, { checkpoint: true });
+  const result = await waitForEnd(events);
+  assert.strictEqual(result.ok, false);
+  assert.match(result.error || '', /checkpoint commit failed/);
+  assert.ok(!events.some((e) => e.type === 'step'));
+  assert.ok(fs.existsSync(result.logPath));
+});

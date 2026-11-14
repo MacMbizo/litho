@@ -27,6 +27,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchJson: (url: string) => ipcRenderer.invoke('net:fetchJson', url),
   storeRead: (name: string) => ipcRenderer.invoke('store:read', name),
   storeWrite: (name: string, data: unknown) => ipcRenderer.invoke('store:write', name, data),
+  fixPlan: (projectRoot: string, recipe: unknown, title: string) => ipcRenderer.invoke('fix:plan', projectRoot, recipe, title),
+  fixRun: (planId: string, opts: { checkpoint: boolean }) => ipcRenderer.invoke('fix:run', planId, opts),
+  fixStop: (runId: string) => ipcRenderer.invoke('fix:stop', runId),
+  fixApplyConfig: (runId: string, index: number) => ipcRenderer.invoke('fix:applyConfig', runId, index),
+  fixCommit: (runId: string) => ipcRenderer.invoke('fix:commit', runId),
+  fixUndo: (runId: string) => ipcRenderer.invoke('fix:undo', runId),
+  fixOpenFile: (runId: string, file: string) => ipcRenderer.invoke('fix:openFile', runId, file),
+  fixOpenLog: (runId: string) => ipcRenderer.invoke('fix:openLog', runId),
+  onFixEvent: (callback: (e: any) => void) => {
+    const listener = (_: unknown, e: any) => callback(e);
+    ipcRenderer.on('fix:event', listener);
+    return () => {
+      ipcRenderer.removeListener('fix:event', listener);
+    };
+  },
   onFsChanged: (callback: (data: any) => void) => {
     const listener = (_: unknown, data: any) => callback(data);
     ipcRenderer.on('fs:changed', listener);

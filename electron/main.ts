@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
+import { FixController } from './fixRunner';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -57,6 +58,50 @@ function storePath(name: string): string {
   return path.join(app.getPath('userData'), 'docatlas', `${name}.json`);
 }
 
+// --- Safe stack fixer --------------------------------------------------------
+// Fixes may only run in projects the app itself scanned (this session) or remembers in its portfolio.
+const knownProjectRoots = new Set<string>();
+const normRoot = (p: string) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+
+function rememberProjectRoot(p: string) {
+  knownProjectRoots.add(normRoot(p));
+}
+
+async function isKnownProjectRoot(p: string): Promise<boolean> {
+  const key = normRoot(p);
+  if (knownProjectRoots.has(key)) return true;
+  try {
+    const snap = JSON.parse(await fs.promises.readFile(storePath('portfolio'), 'utf-8'));
+    const roots: string[] = (snap?.projects || []).map((e: any) => e?.workspace?.rootPath).filter((r: unknown) => typeof r === 'string');
+    return roots.some((r) => normRoot(r) === key);
+  } catch {
+    return false;
+  }
+}
+
+const fixController = new FixController({
+  logDir: path.join(app.getPath('userData'), 'docatlas', 'fix-logs'),
+  isKnownRoot: isKnownProjectRoot,
+  emit: (e) => mainWindow?.webContents.send('fix:event', e),
+});
+
+ipcMain.handle('fix:plan', (_, projectRoot: string, recipe: unknown, title: string) => fixController.plan(projectRoot, recipe, title));
+ipcMain.handle('fix:run', (_, planId: string, opts?: { checkpoint?: boolean }) => fixController.run(planId, { checkpoint: Boolean(opts?.checkpoint) }));
+ipcMain.handle('fix:stop', (_, runId: string) => fixController.stop(runId));
+ipcMain.handle('fix:applyConfig', (_, runId: string, index: number) => fixController.applyConfig(runId, Number(index)));
+ipcMain.handle('fix:commit', (_, runId: string) => fixController.commit(runId));
+ipcMain.handle('fix:undo', (_, runId: string) => fixController.undo(runId));
+ipcMain.handle('fix:openFile', async (_, runId: string, file: string) => {
+  const err = await shell.openPath(fixController.resolveFile(runId, file));
+  if (err) throw new Error(err);
+  return true;
+});
+ipcMain.handle('fix:openLog', async (_, runId: string) => {
+  const err = await shell.openPath(fixController.logPath(runId));
+  if (err) throw new Error(err);
+  return true;
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -101,6 +146,7 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    fixController.stopAll();
     mainWindow = null;
     if (activeWatcher) {
       activeWatcher.close();
@@ -256,6 +302,7 @@ ipcMain.handle('dialog:openDirectory', async () => {
 
 ipcMain.handle('fs:scanDirectory', async (_, dirPath: string, opts?: { watch?: boolean }) => {
   try {
+    rememberProjectRoot(dirPath);
     const rootName = path.basename(dirPath);
     const [{ files, tree }, { configFiles, installedPackages }] = await Promise.all([
       scanDirectoryRecursive(dirPath, dirPath),
@@ -319,7 +366,10 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
       return { rootPath: projDir, rootName: entry.name, files, tree, configFiles, installedPackages };
     });
 
-    for (const p of scanned) if (p) projects.push(p);
+    for (const p of scanned) if (p) {
+      projects.push(p);
+      rememberProjectRoot(p.rootPath);
+    }
 
     projects.sort((a, b) => a.rootName.localeCompare(b.rootName));
     return { rootPath: rootDir, projects };
