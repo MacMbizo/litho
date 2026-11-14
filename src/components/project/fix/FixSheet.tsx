@@ -30,7 +30,7 @@ interface FixSheetProps {
   onContinue: () => void;
   onApplyProposal: (index: number) => void;
   onSkipProposal: (index: number) => void;
-  onOpenFile: (file: string) => void;
+  onOpenFile: (proposalIndex: number) => void;
   onOpenLog: () => void;
   onCommit: () => void;
   onUndo: () => void;
@@ -76,6 +76,7 @@ export const FixSheet: React.FC<FixSheetProps> = (props) => {
   useEffect(() => setConfirmUndo(false), [s.runId]);
 
   const plan = s.plan;
+  const multiFolder = Boolean(plan && new Set(plan.steps.map((st) => st.cwd)).size > 1);
   const failedAt = result?.failedStep;
   const changed = result?.changedFiles || [];
 
@@ -126,7 +127,13 @@ export const FixSheet: React.FC<FixSheetProps> = (props) => {
             <>
               <div className="space-y-1.5">
                 <div className="text-neutral-400">
-                  Runs in <code className="font-mono text-neutral-200">{plan.steps[0]?.cwd || plan.projectRoot}</code>
+                  {multiFolder ? (
+                    'Runs in several folders, shown under each step'
+                  ) : (
+                    <>
+                      Runs in <code className="font-mono text-neutral-200">{plan.steps[0]?.cwd || plan.projectRoot}</code>
+                    </>
+                  )}
                 </div>
                 <ol className="space-y-1">
                   {plan.steps.map((st, i) => {
@@ -142,7 +149,10 @@ export const FixSheet: React.FC<FixSheetProps> = (props) => {
                         <span className="w-4 text-center text-neutral-500">
                           {state === 'running' ? <Loader2 className="w-3 h-3 animate-spin inline" /> : state === 'done' ? <Check className="w-3 h-3 inline text-emerald-400" /> : state === 'failed' ? <X className="w-3 h-3 inline text-rose-400" /> : i + 1}
                         </span>
-                        <span className="flex-1 min-w-0 truncate text-emerald-200">{st.argv.join(' ')}</span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block truncate text-emerald-200">{st.argv.join(' ')}</span>
+                          {multiFolder && <span className="block truncate text-[10px] text-neutral-500 font-sans">in {st.cwd}</span>}
+                        </span>
                         {st.isCheck && <span className="text-[10px] text-neutral-500 font-sans">(check)</span>}
                         {s.steps[i]?.ms !== undefined && <span className="text-[10px] text-neutral-500 font-sans">{fmtMs(s.steps[i].ms!)}</span>}
                         {result && exit !== null && exit !== undefined && exit !== 0 && <span className="text-[10px] text-rose-300 font-sans">exit {exit}</span>}
@@ -259,8 +269,8 @@ export const FixSheet: React.FC<FixSheetProps> = (props) => {
                               </>
                             )
                           ) : (
-                            <button type="button" onClick={() => props.onOpenFile(p.file)} className="px-2.5 py-1 rounded-md bg-[#2a2a2a] hover:bg-[#333] text-neutral-200 flex items-center gap-1.5">
-                              <FolderOpen className="w-3.5 h-3.5" /> Open file
+                            <button type="button" onClick={() => props.onOpenFile(i)} className="px-2.5 py-1 rounded-md bg-[#2a2a2a] hover:bg-[#333] text-neutral-200 flex items-center gap-1.5">
+                              <FolderOpen className="w-3.5 h-3.5" /> Show in folder
                             </button>
                           )}
                         </div>
@@ -275,7 +285,9 @@ export const FixSheet: React.FC<FixSheetProps> = (props) => {
                   Changed files <span className="font-mono text-neutral-600">{changed.length}</span>
                 </div>
                 {changed.length === 0 ? (
-                  <p className="text-neutral-500">{result.repoRoot ? 'No tracked files changed.' : 'No git repo, so changes can’t be listed.'}</p>
+                  <p className="text-neutral-500">
+                    {result.repoRoot ? 'No files changed that were clean before.' : 'Git couldn’t list the changes (no repo, or git failed), so undo is unavailable.'}
+                  </p>
                 ) : (
                   <ul className="max-h-32 overflow-y-auto rounded-md bg-[#141414] border border-[#2a2a2a] p-2 font-mono text-[11px] space-y-0.5">
                     {changed.map((f) => (
@@ -287,6 +299,14 @@ export const FixSheet: React.FC<FixSheetProps> = (props) => {
                   </ul>
                 )}
               </div>
+
+              {result.alreadyDirty.length > 0 && (
+                <p className="text-amber-200/90">
+                  The fix also changed {result.alreadyDirty.length} file{result.alreadyDirty.length === 1 ? '' : 's'} that already had your uncommitted edits (
+                  <span className="font-mono">{result.alreadyDirty.slice(0, 4).join(', ')}{result.alreadyDirty.length > 4 ? ', …' : ''}</span>
+                  ). Undo and Commit leave {result.alreadyDirty.length === 1 ? 'it' : 'them'} alone, so your edits are never thrown away.
+                </p>
+              )}
 
               {confirmUndo && !s.undone && (
                 <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-100 space-y-2">

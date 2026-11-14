@@ -85,7 +85,9 @@ async function isKnownProjectRoot(p: string): Promise<boolean> {
 const fixController = new FixController({
   logDir: path.join(app.getPath('userData'), 'docatlas', 'fix-logs'),
   isKnownRoot: isKnownProjectRoot,
-  emit: (e) => mainWindow?.webContents.send('fix:event', e),
+  emit: (e) => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('fix:event', e);
+  },
 });
 
 ipcMain.handle('fix:plan', (_, projectRoot: string, recipe: unknown, title: string) => fixController.plan(projectRoot, recipe, title));
@@ -94,9 +96,9 @@ ipcMain.handle('fix:stop', (_, runId: string) => fixController.stop(runId));
 ipcMain.handle('fix:applyConfig', (_, runId: string, index: number) => fixController.applyConfig(runId, Number(index)));
 ipcMain.handle('fix:commit', (_, runId: string) => fixController.commit(runId));
 ipcMain.handle('fix:undo', (_, runId: string) => fixController.undo(runId));
-ipcMain.handle('fix:openFile', async (_, runId: string, file: string) => {
-  const err = await shell.openPath(fixController.resolveFile(runId, file));
-  if (err) throw new Error(err);
+// Reveal, never open: shell.openPath would run app.config.js through Windows Script Host on a stock install.
+ipcMain.handle('fix:openFile', (_, runId: string, index: number) => {
+  shell.showItemInFolder(fixController.proposalFile(runId, Number(index)));
   return true;
 });
 ipcMain.handle('fix:openLog', async (_, runId: string) => {

@@ -338,3 +338,69 @@ test('FixController: a failed checkpoint commit runs nothing', async () => {
   assert.ok(!events.some((e) => e.type === 'step'));
   assert.ok(fs.existsSync(result.logPath));
 });
+
+// --- Final review fixes -----------------------------------------------------
+import { touchedDirty } from '../src/services/fixRecipes.ts';
+import { projectScope } from '../electron/fixGit.ts';
+
+test('review: files staged before the fix (M → MM, A → AM) are never in the undo list', () => {
+  const before = parsePorcelain('M  package.json\nA  new-feature.ts\n');
+  const after = parsePorcelain('MM package.json\nAM new-feature.ts\n M package-lock.json\n');
+  assert.deepStrictEqual(changedSince(before, after), [{ path: 'package-lock.json', status: 'modified' }]);
+  assert.deepStrictEqual(touchedDirty(before, after).sort(), ['new-feature.ts', 'package.json']);
+});
+
+test('review: removing sdkVersion edits only that line (inline arrays stay inline)', () => {
+  const text = '{\n  "expo": {\n    "name": "a",\n    "assetBundlePatterns": ["**/*"],\n    "sdkVersion": "50.0.0"\n  }\n}\n';
+  assert.strictEqual(removeSdkVersion(text, 51), '{\n  "expo": {\n    "name": "a",\n    "assetBundlePatterns": ["**/*"]\n  }\n}\n');
+  const middle = '{\n  "expo": {\n    "sdkVersion": "50.0.0",\n    "name": "a"\n  }\n}';
+  assert.strictEqual(removeSdkVersion(middle, 51), '{\n  "expo": {\n    "name": "a"\n  }\n}');
+});
+
+test('review: undo treats [brackets] in Expo Router paths literally', async () => {
+  const repo = tempRepo();
+  fs.mkdirSync(path.join(repo, 'app'));
+  fs.writeFileSync(path.join(repo, 'app', '[id].tsx'), 'route\n');
+  fs.writeFileSync(path.join(repo, 'app', 'i.tsx'), 'mine\n');
+  execFileSync('git', ['add', '-A'], { cwd: repo });
+  execFileSync('git', ['commit', '-q', '-m', 'routes'], { cwd: repo });
+  const head = (await gitState(repo))!.head;
+  fs.writeFileSync(path.join(repo, 'app', '[id].tsx'), 'changed by fix\n');
+  fs.writeFileSync(path.join(repo, 'app', 'i.tsx'), 'user edit\n');
+  await restoreFiles(repo, head, [{ path: 'app/[id].tsx', status: 'modified' }]);
+  assert.strictEqual(fs.readFileSync(path.join(repo, 'app', '[id].tsx'), 'utf8'), 'route\n');
+  assert.strictEqual(fs.readFileSync(path.join(repo, 'app', 'i.tsx'), 'utf8'), 'user edit\n');
+});
+
+test('review: a repo above the project only counts and checkpoints files inside the project', async () => {
+  const repo = tempRepo();
+  const proj = path.join(repo, 'projects', 'app one');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, 'package.json'), '{}\n');
+  execFileSync('git', ['add', '-A'], { cwd: repo });
+  execFileSync('git', ['commit', '-q', '-m', 'proj'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'secret.env'), 'TOKEN=x\n');
+  fs.writeFileSync(path.join(proj, 'local.txt'), 'mine\n');
+  const scope = projectScope(repo, proj);
+  assert.strictEqual(scope, 'projects/app one');
+  assert.strictEqual(projectScope(repo, repo), '');
+  assert.strictEqual(projectScope(proj, repo), '');
+  const s = (await gitState(proj, scope))!;
+  assert.deepStrictEqual([...s.dirty.keys()], ['projects/app one/local.txt']);
+  await checkpoint(s.repoRoot, scope);
+  assert.deepStrictEqual([...(await statusMap(repo)).keys()], ['secret.env']);
+});
+
+test('review: a run that cannot open its log still ends (never stuck "running")', async () => {
+  const repo = tempRepo();
+  const blocker = path.join(tempDir(), 'not-a-dir');
+  fs.writeFileSync(blocker, 'x');
+  const events: FixEvent[] = [];
+  const c = new FixController({ logDir: path.join(blocker, 'logs'), isKnownRoot: async () => true, emit: (e) => events.push(e) });
+  const plan = await c.plan(repo, { kind: 'install', appPath: '' }, 'Install');
+  await c.run(plan.planId, {});
+  const result = await waitForEnd(events);
+  assert.strictEqual(result.ok, false);
+  assert.ok(result.error);
+  assert.strictEqual(c.busy, false);
+});

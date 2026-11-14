@@ -17,25 +17,46 @@ export interface GitState {
 
 export const CHECKPOINT_MESSAGE = 'chore: checkpoint before DocAtlas fix';
 
+/** A hook or credential prompt must never leave a fix "running" forever. */
+const GIT_TIMEOUT_MS = 5 * 60 * 1000;
+
 function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', ['-c', 'core.quotePath=false', ...args], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error((stderr || err.message).toString().trim()));
-      else resolve(stdout.toString());
-    });
+    // --literal-pathspecs: Expo Router files like app/[id].tsx must never glob-match app/i.tsx.
+    execFile(
+      'git',
+      ['--literal-pathspecs', '-c', 'core.quotePath=false', ...args],
+      { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: GIT_TIMEOUT_MS },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error((stderr || err.message).toString().trim() || 'git failed'));
+        else resolve(stdout.toString());
+      }
+    );
   });
 }
 
-export async function statusMap(repoRoot: string): Promise<Map<string, string>> {
-  return parsePorcelain(await git(repoRoot, ['status', '--porcelain', '--untracked-files=all']));
+/**
+ * Pathspec that keeps git inside the project when the repo sits above it (e.g. C:\Prj as one repo,
+ * or a dotfiles repo in the home folder). '' when the repo is the project or lives inside it.
+ */
+export function projectScope(repoRoot: string, projectRoot: string): string {
+  const rel = path.relative(path.resolve(repoRoot), path.resolve(projectRoot));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return '';
+  return rel.split(path.sep).join('/');
+}
+
+const scoped = (scope: string) => (scope ? ['--', scope] : []);
+
+export async function statusMap(repoRoot: string, scope = ''): Promise<Map<string, string>> {
+  return parsePorcelain(await git(repoRoot, ['status', '--porcelain', '--untracked-files=all', ...scoped(scope)]));
 }
 
 /** The repo holding `cwd` (nested apps often have their own), or null when there's no repo or no git. */
-export async function gitState(cwd: string): Promise<GitState | null> {
+export async function gitState(cwd: string, scope = ''): Promise<GitState | null> {
   try {
     const repoRoot = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim();
     const head = (await git(repoRoot, ['rev-parse', 'HEAD'])).trim();
-    return { repoRoot: path.resolve(repoRoot), head, dirty: await statusMap(repoRoot) };
+    return { repoRoot: path.resolve(repoRoot), head, dirty: await statusMap(repoRoot, scope) };
   } catch {
     return null;
   }
@@ -45,10 +66,13 @@ async function headOf(repoRoot: string): Promise<string> {
   return (await git(repoRoot, ['rev-parse', 'HEAD'])).trim();
 }
 
-/** Commit every current change (untracked included) so the fix starts from a clean tree. Rejects if git refuses. */
-export async function checkpoint(repoRoot: string): Promise<string> {
-  await git(repoRoot, ['add', '-A']);
-  await git(repoRoot, ['commit', '-q', '-m', CHECKPOINT_MESSAGE]);
+/**
+ * Commit every current change inside `scope` (untracked included) so the fix starts from a clean tree.
+ * Rejects if git refuses (hook, identity, signing).
+ */
+export async function checkpoint(repoRoot: string, scope = ''): Promise<string> {
+  await git(repoRoot, ['add', '-A', ...scoped(scope)]);
+  await git(repoRoot, ['commit', '-q', '-m', CHECKPOINT_MESSAGE, ...scoped(scope)]);
   return headOf(repoRoot);
 }
 

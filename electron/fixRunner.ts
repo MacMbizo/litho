@@ -16,6 +16,7 @@ import {
   recipeAppPaths,
   removeSdkVersion,
   toCmdLine,
+  touchedDirty,
   validateRecipe,
   type AppContext,
   type ChangedFile,
@@ -23,7 +24,7 @@ import {
   type FixRecipe,
   type FixStep,
 } from '../src/services/fixRecipes';
-import { checkpoint, commitFiles, gitState, restoreFiles, statusMap } from './fixGit';
+import { checkpoint, commitFiles, gitState, projectScope, restoreFiles, statusMap } from './fixGit';
 
 export type FixEvent =
   | { type: 'output'; runId: string; stream: 'stdout' | 'stderr' | 'info'; text: string }
@@ -35,7 +36,8 @@ export interface FixPlan {
   projectRoot: string;
   title: string;
   steps: (FixStep & { cwd: string })[];
-  git: { repoRoot: string; head: string; dirtyCount: number } | null;
+  /** scope: the project folder relative to repoRoot when the repo sits above the project ('' otherwise). */
+  git: { repoRoot: string; head: string; dirtyCount: number; scope: string } | null;
 }
 
 export interface FixRunResult {
@@ -48,6 +50,8 @@ export interface FixRunResult {
   steps: { label: string; exitCode: number | null; ms: number; isCheck: boolean }[];
   /** Paths relative to the git repo root (`repoRoot`). */
   changedFiles: ChangedFile[];
+  /** Files that were already dirty before the fix and that it changed again: shown, never undone or committed. */
+  alreadyDirty: string[];
   repoRoot?: string;
   configProposals: ConfigProposal[];
   logPath: string;
@@ -227,13 +231,16 @@ export class FixController {
       cwds.set(appPath, dir);
     }
     const steps = buildSteps(recipe, (p) => contexts.get(p)!).map((s) => ({ ...s, cwd: cwds.get(s.appPath)! }));
-    const g = await gitState(steps[0]?.cwd || projectRoot);
+    const firstCwd = steps[0]?.cwd || projectRoot;
+    const found = await gitState(firstCwd);
+    const scope = found ? projectScope(found.repoRoot, projectRoot) : '';
+    const g = found && scope ? await gitState(firstCwd, scope) : found;
     const plan: FixPlan = {
       planId: crypto.randomUUID(),
       projectRoot,
       title: String(title || 'Fix').slice(0, 200),
       steps,
-      git: g ? { repoRoot: g.repoRoot, head: g.head, dirtyCount: g.dirty.size } : null,
+      git: g ? { repoRoot: g.repoRoot, head: g.head, dirtyCount: g.dirty.size, scope } : null,
     };
     const now = Date.now();
     for (const [id, p] of this.plans) if (now - p.createdAt > PLAN_TTL_MS) this.plans.delete(id);
@@ -262,10 +269,21 @@ export class FixController {
     const safe = path.basename(plan.projectRoot).replace(/[^A-Za-z0-9._-]+/g, '_') || 'project';
     const file = path.join(this.opts.logDir, `${stamp()}-${safe}.log`);
     const stream = fs.createWriteStream(file, { encoding: 'utf8' });
+    let broken = false;
+    // A disk or antivirus error on the log must not crash the main process; the run carries on unlogged.
+    stream.on('error', () => {
+      broken = true;
+    });
     return {
       file,
-      write: (s) => stream.write(s),
-      close: () => new Promise((r) => stream.end(() => r())),
+      write: (s) => {
+        if (!broken) stream.write(s);
+      },
+      close: () =>
+        new Promise((r) => {
+          if (broken) return r();
+          stream.end(() => r());
+        }),
     };
   }
 
@@ -277,27 +295,65 @@ export class FixController {
     }
   }
 
+  /** Always ends with an `end` event, even when something unexpected throws: the UI must never stay "running". */
   private async execute(runId: string, rec: RunRecord, wantCheckpoint: boolean): Promise<void> {
+    const { plan } = rec;
+    let logFile = '';
+    try {
+      await this.executeSteps(runId, rec, wantCheckpoint, (f) => (logFile = f));
+    } catch (err: any) {
+      const result: FixRunResult = {
+        runId,
+        ok: false,
+        stopped: rec.signal.stopped,
+        error: `The fix could not run: ${err?.message || err}`,
+        steps: plan.steps.map((s) => ({ label: s.label, exitCode: null, ms: 0, isCheck: s.isCheck })),
+        changedFiles: [],
+        alreadyDirty: [],
+        repoRoot: plan.git?.repoRoot,
+        configProposals: [],
+        logPath: logFile,
+        undoable: false,
+        checkpointed: false,
+      };
+      rec.result = result;
+      this.safeEmit({ type: 'end', runId, result });
+    }
+  }
+
+  private safeEmit(e: FixEvent): void {
+    try {
+      this.opts.emit(e);
+    } catch {
+      /* window gone */
+    }
+  }
+
+  private async executeSteps(runId: string, rec: RunRecord, wantCheckpoint: boolean, setLog: (f: string) => void): Promise<void> {
     const { plan, recipe } = rec;
     const log = await this.openLog(plan);
+    setLog(log.file);
     const emit = (e: FixEvent) => {
       if (e.type === 'output') log.write(e.text);
-      this.opts.emit(e);
+      this.safeEmit(e);
     };
     const info = (text: string) => emit({ type: 'output', runId, stream: 'info', text });
     log.write(`# ${plan.title}\n# ${plan.projectRoot}\n# ${new Date().toISOString()}\n`);
 
     const repoRoot = plan.git?.repoRoot;
+    const scope = plan.git?.scope || '';
     let checkpointed = false;
     let error: string | undefined;
     rec.startHead = plan.git?.head;
 
     if (repoRoot && wantCheckpoint) {
-      const fresh = await gitState(repoRoot);
-      if (fresh && fresh.dirty.size > 0) {
+      const fresh = await gitState(repoRoot, scope);
+      if (!fresh) {
+        error = 'Couldn’t read the git state for the checkpoint, so nothing was run.';
+      } else if (fresh.dirty.size > 0) {
         try {
           info(`Committing ${fresh.dirty.size} uncommitted file(s) as a checkpoint…\n`);
-          rec.startHead = await checkpoint(repoRoot);
+          rec.startHead = await checkpoint(repoRoot, scope);
           checkpointed = true;
         } catch (err: any) {
           error = `The checkpoint commit failed, so nothing was run: ${err?.message || err}`;
@@ -309,19 +365,30 @@ export class FixController {
     let ms: number[] = plan.steps.map(() => 0);
     let failedStep: number | undefined;
     let changedFiles: ChangedFile[] = [];
+    let alreadyDirty: string[] = [];
     let configProposals: ConfigProposal[] = [];
+    // Undo is only offered when git told us exactly what was dirty before and after (fail closed).
+    let gitTrusted = Boolean(repoRoot);
 
     if (error) {
       info(`${error}\n`);
     } else {
-      const before = repoRoot ? await statusMap(repoRoot).catch(() => new Map<string, string>()) : new Map<string, string>();
+      let before: Map<string, string> | null = null;
+      if (repoRoot) before = await statusMap(repoRoot, scope).catch(() => null);
+      if (repoRoot && !before) {
+        gitTrusted = false;
+        info('Couldn’t read git status before the fix; undo will be unavailable.\n');
+      }
       const res = await runSteps(plan.steps, emit, runId, rec.signal);
       exitCodes = res.exitCodes;
       ms = res.ms;
       failedStep = res.failedStep;
-      if (repoRoot) {
-        const after = await statusMap(repoRoot).catch(() => new Map<string, string>());
-        changedFiles = changedSince(before, after);
+      if (repoRoot && before) {
+        const after = await statusMap(repoRoot, scope).catch(() => null);
+        if (after) {
+          changedFiles = changedSince(before, after);
+          alreadyDirty = touchedDirty(before, after);
+        } else gitTrusted = false;
       }
       if (failedStep === undefined && (recipe.kind === 'expo-sdk-step' || recipe.kind === 'expo-align')) {
         configProposals = await this.expoConfigProposals(plan, recipe);
@@ -337,17 +404,18 @@ export class FixController {
       error,
       steps: plan.steps.map((s, i) => ({ label: s.label, exitCode: exitCodes[i], ms: ms[i], isCheck: s.isCheck })),
       changedFiles,
-      repoRoot,
+      alreadyDirty,
+      repoRoot: gitTrusted ? repoRoot : undefined,
       configProposals,
       logPath: log.file,
-      undoable: Boolean(repoRoot && rec.startHead) && !error,
+      undoable: gitTrusted && Boolean(rec.startHead) && !error,
       checkpointed,
     };
     info(`\n${result.ok ? 'Fix finished.' : stopped ? 'Fix stopped.' : 'Fix did not finish.'}\n`);
     await log.close();
     await this.pruneLogs();
     rec.result = result;
-    this.opts.emit({ type: 'end', runId, result });
+    this.safeEmit({ type: 'end', runId, result });
   }
 
   private async expoConfigProposals(plan: FixPlan, recipe: FixRecipe): Promise<ConfigProposal[]> {
@@ -393,8 +461,15 @@ export class FixController {
     if (this.active) this.stop(this.active);
   }
 
+  /** The app.config.ts/js a "code-line" proposal points at (only those; never an arbitrary path from the UI). */
+  proposalFile(runId: string, index: number): string {
+    const p = this.record(runId).result.configProposals[index];
+    if (!p || p.kind !== 'code-line') throw new Error('No such config file');
+    return this.resolveFile(runId, p.file);
+  }
+
   /** Absolute path of a project file, refusing anything outside the project. */
-  resolveFile(runId: string, file: string): string {
+  private resolveFile(runId: string, file: string): string {
     const rec = this.runs.get(runId);
     if (!rec) throw new Error('Unknown fix');
     const abs = path.resolve(rec.plan.projectRoot, ...String(file).split('/').filter(Boolean));

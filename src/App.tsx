@@ -787,7 +787,10 @@ const AppContent: React.FC = () => {
 
   const getFreshnessReport = (rootPath: string) => {
     const entry = portfolioProjects.find((e) => e.workspace.rootPath === rootPath);
-    return entry ? assessStackFreshness(entry.auditReport.stackProfile) : undefined;
+    if (entry) return assessStackFreshness(entry.auditReport.stackProfile);
+    // The open project may not be in the portfolio (Fix from Project Overview): use its own live profile.
+    if (rootPath === workspace.rootPath && workspace.kind !== 'notes') return assessStackFreshness(activeAuditReport.stackProfile);
+    return undefined;
   };
 
   const rescanPortfolioEntry = async (rootPath: string) => {

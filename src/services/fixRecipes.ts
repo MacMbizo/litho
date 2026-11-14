@@ -206,12 +206,28 @@ function statusOf(code: string): ChangedFile['status'] {
 }
 
 /** Files whose status the fix changed. Files dirty before with the same code, and node_modules, are left out. */
+const isNodeModules = (p: string) => p === 'node_modules' || p.startsWith('node_modules/') || p.includes('/node_modules/');
+
+/**
+ * Files the fix changed that were clean before it ran: the only ones undo and "Commit this fix" may touch.
+ * A file that was already dirty (staged or not) is never listed, even if the fix changed it again,
+ * because restoring it would also throw away the user's own edits. See touchedDirty for those.
+ */
 export function changedSince(before: Map<string, string>, after: Map<string, string>): ChangedFile[] {
   const out: ChangedFile[] = [];
   for (const [p, code] of after) {
-    if (p === 'node_modules' || p.startsWith('node_modules/') || p.includes('/node_modules/')) continue;
-    if (before.get(p) === code) continue;
+    if (isNodeModules(p) || before.has(p)) continue;
     out.push({ path: p, status: statusOf(code) });
+  }
+  return out;
+}
+
+/** Files that were already dirty before the fix and whose status the fix changed (shown, never undone). */
+export function touchedDirty(before: Map<string, string>, after: Map<string, string>): string[] {
+  const out: string[] = [];
+  for (const [p, code] of before) {
+    if (isNodeModules(p)) continue;
+    if (after.get(p) !== code) out.push(p);
   }
   return out;
 }
@@ -241,6 +257,31 @@ export function removeSdkVersion(jsonText: string, expectedMajor: number): strin
   const current = holder.sdkVersion;
   if (typeof current !== 'string' || majorOf(current) === expectedMajor) return null;
   delete holder.sdkVersion;
+  const expected = JSON.stringify(obj);
+
+  // Preferred: delete just the "sdkVersion" line (and a now-dangling comma above it), so the rest of the
+  // file stays byte-for-byte as it was. Accepted only if the result parses to exactly the expected object.
+  const lines = jsonText.split('\n');
+  const hits = lines.map((l, i) => (/^\s*"sdkVersion"\s*:\s*"[^"]*"\s*,?\s*\r?$/.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (hits.length === 1) {
+    const i = hits[0];
+    const hadComma = /,\s*\r?$/.test(lines[i]);
+    const next = lines.slice(0, i).concat(lines.slice(i + 1));
+    if (!hadComma) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (next[j].trim() === '' || next[j].trim() === '\r') continue;
+        next[j] = next[j].replace(/,(\s*\r?)$/, '$1');
+        break;
+      }
+    }
+    const candidate = next.join('\n');
+    try {
+      if (JSON.stringify(JSON.parse(candidate)) === expected) return candidate;
+    } catch {
+      /* fall through to re-serialising */
+    }
+  }
+
   const indentMatch = jsonText.match(/\n([ \t]+)\S/);
   const indent = indentMatch ? indentMatch[1] : 0;
   const eol = jsonText.includes('\r\n') ? '\r\n' : '\n';

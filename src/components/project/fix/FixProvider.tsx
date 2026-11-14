@@ -195,7 +195,7 @@ export const FixProvider: React.FC<FixProviderProps> = ({ children, onFixed, get
             patch((s) => ({ busyAction: undefined, proposals: { ...s.proposals, [i]: ok ? 'applied' : 'stale' } }));
           }}
           onSkipProposal={(i) => patch((s) => ({ proposals: { ...s.proposals, [i]: 'skipped' } }))}
-          onOpenFile={(file) => session.runId && api?.fixOpenFile?.(session.runId, file).catch((err: any) => patch({ error: err?.message }))}
+          onOpenFile={(index) => session.runId && api?.fixOpenFile?.(session.runId, index).catch((err: any) => patch({ error: err?.message }))}
           onOpenLog={() => session.runId && api?.fixOpenLog?.(session.runId).catch((err: any) => patch({ error: err?.message }))}
           onCommit={() => action('commit', async () => ({ committed: (await api!.fixCommit!(session.runId!)).slice(0, 7) }))}
           onUndo={() =>

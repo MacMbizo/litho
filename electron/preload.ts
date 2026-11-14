@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fixApplyConfig: (runId: string, index: number) => ipcRenderer.invoke('fix:applyConfig', runId, index),
   fixCommit: (runId: string) => ipcRenderer.invoke('fix:commit', runId),
   fixUndo: (runId: string) => ipcRenderer.invoke('fix:undo', runId),
-  fixOpenFile: (runId: string, file: string) => ipcRenderer.invoke('fix:openFile', runId, file),
+  fixOpenFile: (runId: string, index: number) => ipcRenderer.invoke('fix:openFile', runId, index),
   fixOpenLog: (runId: string) => ipcRenderer.invoke('fix:openLog', runId),
   onFixEvent: (callback: (e: any) => void) => {
     const listener = (_: unknown, e: any) => callback(e);

@@ -50,7 +50,7 @@ declare global {
       fixApplyConfig?: (runId: string, index: number) => Promise<boolean>;
       fixCommit?: (runId: string) => Promise<string>;
       fixUndo?: (runId: string) => Promise<string[]>;
-      fixOpenFile?: (runId: string, file: string) => Promise<boolean>;
+      fixOpenFile?: (runId: string, index: number) => Promise<boolean>;
       fixOpenLog?: (runId: string) => Promise<boolean>;
       onFixEvent?: (callback: (e: FixEvent) => void) => () => void;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
