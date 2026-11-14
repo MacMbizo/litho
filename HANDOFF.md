@@ -45,6 +45,13 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 ## Recent commits
 
+- `37370ed` Litho favicon, labels and DocAtlas mark in the UI (merged from `feat/litho-icons`)
+- `f6052ad` Litho window title and icon; userData pinned
+- `b240b57` Rendered Litho PNG/ICO assets and favicon
+- `5f29323` Litho and DocAtlas SVG marks
+- `5c53c6b` README with badges, MIT LICENSE, first push to GitHub
+- `31466a5` Notes: rename from heading, notes folder setting, open files from the command line
+- `ad40f69` Notes: standalone Markdown notes and opening any .md file
 - `56cdbc8` Stack freshness, remembered portfolio, redesigned landing page
 - `40bf59c` Stack penalty removed from the doc-health grade; freshness types added
 - `a0e5de8` Audit calibrated on the real `C:\Prj` projects
@@ -131,11 +138,53 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 - **Untested:** the "Choose folder" dialog (the root was set by script) and light theme.
 - **Phone width:** the existing fixed sidebar fills the screen. Not a target, since the Electron window's minimum width is 960px.
 - **Unchecked claim:** "store Expo Go only runs the newest SDK" comes from memory, not from Expo's docs.
-- **App state left by the test run:** portfolio root `C:\Prj`, snapshot saved, last opened project C1. No project files were modified.
+- **App state:** portfolio root `C:\Prj`, snapshot saved, last workspace `C:\Prj\F4` (e2e runs restore it). No project files were modified by tests.
+- **Taskbar icon not seen:** the screen capture came back blank. The `.ico` is valid and passed to the window, so the owner should glance at the taskbar on the next launch.
+- **A note nobody can account for:** `Documents\DocAtlas Notes\Note 2026-11-13 2231.md` (empty default) wasn't made by a test. It may be the owner's, so it was left alone.
 - **Invalid frontmatter:** 15 real docs have invalid YAML frontmatter; this could be surfaced as an audit issue.
-- **`.agents/`** is untracked: an editor-generated paperRock MCP config. The owner decides whether to gitignore it.
+- **`.agents/`** is untracked: an editor-generated paperRock MCP config, with local paths only and no secrets. The owner decides whether to gitignore it.
+- **Deferred minors from the final review of the Litho brand work:**
+  - The sidebar tile falls back to "N" when there's no workspace (never shown in practice).
+  - Packaging must include `assets/brand/build` and set the builder `icon`.
+  - The userData pin ignores `--user-data-dir`; guard it with `app.commandLine.hasSwitch`.
+  - No test pins "sizes up to 32 px come from litho-small.svg".
+  - `tests/brand.test.ts` resolves paths from the working directory.
+  - The DocAtlas mark at 16 px has no small variant.
+  - Stale comment "Notion aesthetic" in `index.html`.
+- **Pending owner decision:** packaging and installer (electron-builder) plus the "Open with Litho" `.md` association. The app side (argv plus single-instance) is done.
 
-## Suggested next steps (offered to the owner, not started)
+## In progress: brainstorm, awaiting the owner's choice of order (2026-11-14)
+
+The owner wants AI personas, cheaper AI ("Ollama reads, Claude/Gemini thinks"), design docs generated from a PRD, and stack fixes that also update `app.json`/`app.config.*` and can run commands from DocAtlas. Claude proposed **three separate projects** and asked the owner which order: 1 → 2 → 3, or AI first.
+
+1. **Safe stack fixer.**
+   - Run only DocAtlas-generated upgrade commands, never a free shell, and only after a confirmation sheet showing the command and folder.
+   - Offer a checkpoint commit first, or warn about a dirty tree.
+   - Stream output live, with a Stop button.
+   - Afterwards: run `npx expo-doctor`, rescan, and show the changed files.
+   - Propose a config diff for approval. Expo's docs say to remove `expo.sdkVersion` or keep it matching `package.json`. `expo install --fix` doesn't change it.
+   - For `app.config.ts`/`.js`, point at the line instead of rewriting it.
+   - Commands come from `buildUpgradeGuidance` in `src/services/stackInspector.ts` (around line 200). **Today DocAtlas only shows them as text and never edits config.**
+2. **AI foundation.**
+   - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
+   - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.
+   - Move API keys out of localStorage into Electron `safeStorage`, and make calls from the main process. Today the Gemini key is in the URL and calls come from the renderer.
+   - Update the outdated model lists (Gemini 1.5, gpt-4o).
+   - Pipeline:
+     - **Finder:** Ollama embeddings (e.g. `nomic-embed-text`) pick the relevant docs.
+     - **Condenser:** a local Ollama model writes a "doc card" per file, cached by content hash.
+     - **Thinker:** Claude or Gemini gets the persona, DocAtlas's audit facts and the cards, and asks for full text on demand.
+   - **Watch out:** Ollama's default context window is small and silently truncates big personas, so raise `num_ctx`.
+   - Current limits:
+     - Project chat (`ProjectChatDrawer.tsx`) sends the top 4 docs × 2,000 chars.
+     - `AIService.summarize` sends 15k chars; `categorize` 8k.
+3. **Design suite from a PRD** (depends on 2).
+   - Detect an idea-stage project (a PRD but no architecture doc).
+   - Generate drafts: architecture, data model, API, ADRs, test plan.
+   - Write them as `status: Draft` files with `generated_by`, never overwriting, for review before adoption.
+   - The thinker reads the PRD in full, not just its card.
+
+## Suggested next steps (older ideas, not started)
 
 1. "Save upgrade plan to all at-risk projects" (writes `UPGRADE_PLAN.md` to each).
 2. An opt-in setting to track all dependencies, not only the main frameworks.
