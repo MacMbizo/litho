@@ -8,6 +8,9 @@ import { summaryToEntry, type ProjectSummaryPayload } from './projectSummary';
 import type { AIConfig, AIProvider, AITask, CompletionResult, ModelOption } from '../../electron/ai/types';
 import type { CloudProvider, KeyStatus } from '../../electron/ai/keyStore';
 import type { PersonaInfo } from '../../electron/ai/personas';
+import type { PipelineDoc } from '../../electron/ai/finder';
+import type { AskResult, ChatProgress, IndexSummary } from '../../electron/ai/projectChat';
+import type { ChatTurn } from '../../electron/ai/types';
 import type { PortfolioProjectSummary } from '../types/docAudit';
 import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
@@ -76,6 +79,12 @@ declare global {
       aiCreatePersona?: (name: string) => Promise<{ id: string; path: string }>;
       aiOpenPersonasFolder?: () => Promise<boolean>;
       aiAddStarterPersonas?: () => Promise<string[]>;
+      aiProjectIndex?: (key: string, docs: PipelineDoc[]) => Promise<IndexSummary>;
+      aiProjectAsk?: (
+        key: string,
+        req: { projectName: string; question: string; history: ChatTurn[]; facts: string }
+      ) => Promise<AskResult>;
+      onAiProgress?: (callback: (e: ChatProgress & { key: string }) => void) => () => void;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }

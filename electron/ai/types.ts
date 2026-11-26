@@ -18,9 +18,25 @@ export interface CompletionRequest {
   maxTokens?: number;
 }
 
+/** One earlier exchange in a conversation, as plain text. */
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+/** A conversation the model can extend by reading project documents (the thinker). */
+export interface ConverseRequest extends CompletionRequest {
+  history: ChatTurn[];
+}
+
+/** What the thinker's read_doc tool returns: the document, or why it can't be read. */
+export type DocReader = (ref: string) => { path: string; text: string } | { error: string };
+
 export interface CompletionResult {
   text: string;
   model: string;
+  /** Documents the model read in full with read_doc (thinker only), by path. */
+  read?: string[];
   /** The answer stopped at the token limit. */
   truncated?: boolean;
   usage?: {

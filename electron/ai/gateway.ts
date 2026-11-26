@@ -7,10 +7,10 @@ import fs from 'fs';
 import path from 'path';
 import type { KeyStore } from './keyStore';
 import { isCloudProvider } from './keyStore';
-import { CLAUDE_DEFAULT_MODEL, CLAUDE_FALLBACK_MODELS, claudeComplete, claudeModels } from './claude';
+import { CLAUDE_DEFAULT_MODEL, CLAUDE_FALLBACK_MODELS, claudeComplete, claudeConverse, claudeModels } from './claude';
 import { geminiComplete, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels } from './otherProviders';
 import { addStarterPersonas, createPersona, isPersonaId, listPersonas, readPersona, type PersonaInfo } from './personas';
-import { AI_TASKS, TASK_EFFORT, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
+import { AI_TASKS, TASK_EFFORT, type ChatTurn, type ConverseRequest, type DocReader, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
 
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'claude',
@@ -57,9 +57,12 @@ export interface LegacyAIConfig {
 export interface Providers {
   complete: (provider: AIProvider, key: string | undefined, ollamaUrl: string, req: Parameters<typeof claudeComplete>[1]) => Promise<CompletionResult>;
   models: (provider: AIProvider, key: string | undefined, ollamaUrl: string) => Promise<ModelOption[]>;
+  /** Claude's tool-using conversation (the thinker). Optional so older test doubles still fit. */
+  converse?: (key: string, req: ConverseRequest, read: DocReader) => Promise<CompletionResult>;
 }
 
 export const realProviders: Providers = {
+  converse: claudeConverse,
   complete: (p, key, url, req) =>
     p === 'claude' ? claudeComplete(key!, req) : p === 'gemini' ? geminiComplete(key!, req) : p === 'openai' ? openaiComplete(key!, req) : ollamaComplete(url, req),
   models: (p, key, url) => (p === 'claude' ? claudeModels(key!) : p === 'gemini' ? geminiModels(key!) : p === 'openai' ? openaiModels(key!) : ollamaModels(url)),
@@ -169,6 +172,13 @@ export class AIGateway {
     user: string,
     override?: { provider?: AIProvider; persona?: string | null }
   ): Promise<CompletionResult & { provider: AIProvider; persona?: { id: string; name: string } }> {
+    const r = await this.resolve(task, override);
+    const result = await this.providers.complete(r.provider, r.key, r.config.ollamaUrl, { ...r.base, system, user });
+    return { ...result, provider: r.provider, ...(r.persona ? { persona: r.persona } : {}) };
+  }
+
+  /** Provider, key, persona and model settings for a task: the part every call shares. */
+  async resolve(task: AITask, override?: { provider?: AIProvider; persona?: string | null }) {
     const config = await this.getConfig();
     const provider = override?.provider && isProvider(override.provider) ? override.provider : config.provider;
     const key = isCloudProvider(provider) ? await this.keys.get(provider) : undefined;
@@ -180,14 +190,36 @@ export class AIGateway {
       if (!folder) throw new Error('Personas need the desktop app.');
       persona = await readPersona(folder, personaId);
     }
-    const result = await this.providers.complete(provider, key, config.ollamaUrl, {
-      persona: persona?.text,
-      cacheTtl: config.cacheTtl,
-      system,
-      user,
-      model: config.models[provider],
-      effort: TASK_EFFORT[task] ?? 'medium',
-    });
-    return { ...result, provider, ...(persona ? { persona: { id: persona.id, name: persona.name } } : {}) };
+    return {
+      config,
+      provider,
+      key,
+      persona: persona ? { id: persona.id, name: persona.name } : undefined,
+      base: { persona: persona?.text, cacheTtl: config.cacheTtl, model: config.models[provider], effort: TASK_EFFORT[task] ?? ('medium' as const) },
+    };
+  }
+
+  /**
+   * The thinker: Claude converses with a read_doc tool. Other providers have no tool loop here, so the
+   * caller inlines the documents they need (`fallbackUser`) and they get one ordinary request.
+   */
+  async converse(
+    task: AITask,
+    system: string,
+    user: string,
+    history: ChatTurn[],
+    read: DocReader,
+    fallbackUser: () => string
+  ): Promise<CompletionResult & { provider: AIProvider; persona?: { id: string; name: string } }> {
+    const r = await this.resolve(task);
+    const result =
+      r.provider === 'claude' && this.providers.converse
+        ? await this.providers.converse(r.key!, { ...r.base, system, user, history }, read)
+        : await this.providers.complete(r.provider, r.key, r.config.ollamaUrl, {
+            ...r.base,
+            system,
+            user: [...history.map((t) => `${t.role === 'user' ? 'Earlier question' : 'Your earlier answer'}:\n${t.text}`), fallbackUser()].join('\n\n---\n\n'),
+          });
+    return { ...result, provider: r.provider, ...(r.persona ? { persona: r.persona } : {}) };
   }
 }

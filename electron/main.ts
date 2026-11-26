@@ -10,6 +10,8 @@ import { safeStorage } from 'electron';
 import { KeyStore, isCloudProvider } from './ai/keyStore';
 import { AIGateway, realProviders } from './ai/gateway';
 import { PERSONAS_FOLDER_NAME, isPersonaId } from './ai/personas';
+import { ProjectChat, validateDocs } from './ai/projectChat';
+import { ollamaComplete, ollamaEmbed, ollamaInstalled } from './ai/otherProviders';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -201,6 +203,40 @@ ipcMain.handle('ai:createPersona', async (_, name: unknown) => {
   return { id, path: path.join((await aiGateway.personasFolder())!, id) };
 });
 ipcMain.handle('ai:addStarterPersonas', () => aiGateway.addStarterPersonas());
+
+// Project chat (finder → condenser → thinker). Progress goes back to the window that asked.
+const projectChat = new ProjectChat(aiGateway, path.join(app.getPath('userData'), 'docatlas', 'ai-cache'), {
+  installed: ollamaInstalled,
+  embed: ollamaEmbed,
+  write: async (url, model, system, user) => (await ollamaComplete(url, { system, user, model, effort: 'low', maxTokens: 600 })).text,
+});
+const chatKey = (k: unknown) => {
+  if (typeof k !== 'string' || !k || k.length > 2000) throw new Error('Invalid project');
+  return k;
+};
+ipcMain.handle('ai:projectIndex', (event, key: unknown, docs: unknown) => {
+  const k = chatKey(key);
+  return projectChat.index(k, validateDocs(docs), (p) => !event.sender.isDestroyed() && event.sender.send('ai:progress', { key: k, ...p }));
+});
+ipcMain.handle('ai:projectAsk', (event, key: unknown, req: any) => {
+  const k = chatKey(key);
+  if (!req || typeof req.question !== 'string' || !req.question.trim() || req.question.length > 20000) throw new Error('Invalid question');
+  const history = Array.isArray(req.history)
+    ? req.history
+        .filter((t: any) => t && (t.role === 'user' || t.role === 'assistant') && typeof t.text === 'string')
+        .map((t: any) => ({ role: t.role, text: t.text.slice(0, 40000) }))
+    : [];
+  return projectChat.ask(
+    k,
+    {
+      projectName: typeof req.projectName === 'string' ? req.projectName.slice(0, 200) : 'this project',
+      question: req.question,
+      history,
+      facts: typeof req.facts === 'string' ? req.facts : '',
+    },
+    (p) => !event.sender.isDestroyed() && event.sender.send('ai:progress', { key: k, ...p })
+  );
+});
 // Opens the folder itself in File Explorer (created first). Only ever this one folder.
 ipcMain.handle('ai:openPersonasFolder', async () => {
   const dir = await aiGateway.personasFolder();

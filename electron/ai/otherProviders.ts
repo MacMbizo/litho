@@ -147,3 +147,26 @@ export async function ollamaModels(baseUrl: string): Promise<ModelOption[]> {
     .filter((m: any) => !Array.isArray(m.capabilities) || m.capabilities.includes('completion'))
     .map((m: any) => ({ id: m.name, label: `${m.name}${m.details?.parameter_size ? ` (${m.details.parameter_size})` : ''}` }));
 }
+
+/** Every installed model name (including embedding models), or null when Ollama isn't reachable. */
+export async function ollamaInstalled(baseUrl: string): Promise<string[] | null> {
+  try {
+    const data = await call('Ollama', `${checkOllamaUrl(baseUrl)}/api/tags`, {}, 3_000);
+    return (data?.models || []).map((m: any) => String(m.name));
+  } catch {
+    return null;
+  }
+}
+
+/** Embeddings for a batch of texts (/api/embed). Inputs past the model's context are truncated by Ollama. */
+export async function ollamaEmbed(baseUrl: string, model: string, inputs: string[]): Promise<number[][]> {
+  const data = await call(
+    'Ollama',
+    `${checkOllamaUrl(baseUrl)}/api/embed`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, input: inputs, truncate: true }) },
+    120_000
+  );
+  const out = data?.embeddings;
+  if (!Array.isArray(out) || out.length !== inputs.length) throw new Error('Ollama returned no embeddings.');
+  return out;
+}

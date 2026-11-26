@@ -18,6 +18,8 @@ import { ProjectDashboard } from './components/project/ProjectDashboard';
 import { PortfolioView } from './components/project/PortfolioView';
 import { FixProvider } from './components/project/fix/FixProvider';
 import { assessStackFreshness } from './services/stackFreshness';
+import { projectFactsForAI } from './services/projectFacts';
+import { assessProjectBasics } from './services/projectBasics';
 import { DocActionModal } from './components/project/DocActionModal';
 import { DetectedStackProfile, PortfolioProjectSummary } from './types/docAudit';
 import { inspectProjectStack, checkLiveStackVersions } from './services/stackInspector';
@@ -839,6 +841,18 @@ const AppContent: React.FC = () => {
     if (portfolioProjects.some((e) => e.workspace.rootPath === rootPath)) await rescanPortfolioEntry(rootPath);
   };
 
+  // DocAtlas's audit as a brief for project chat; only built while the chat is open.
+  const chatFacts = useMemo(() => {
+    if (!projectChatOpen) return '';
+    if (workspace.kind === 'notes') return projectFactsForAI({ name: workspace.name });
+    return projectFactsForAI({
+      name: workspace.name,
+      report: activeAuditReport,
+      freshness: assessStackFreshness(activeAuditReport.stackProfile),
+      basics: workspace.basics ? assessProjectBasics(workspace.basics) : null,
+    });
+  }, [projectChatOpen, workspace.kind, workspace.name, workspace.basics, activeAuditReport]);
+
   const getFreshnessReport = (rootPath: string) => {
     const entry = portfolioProjects.find((e) => e.workspace.rootPath === rootPath);
     if (entry) return assessStackFreshness(entry.auditReport.stackProfile);
@@ -1548,6 +1562,8 @@ const AppContent: React.FC = () => {
         isOpen={projectChatOpen}
         onClose={() => setProjectChatOpen(false)}
         projectName={workspace.name}
+        projectKey={workspace.kind === 'notes' ? 'notes' : workspace.rootPath || workspace.name}
+        facts={chatFacts}
         files={files}
         onSelectFile={(id) => {
           handleSelectFile(id);
