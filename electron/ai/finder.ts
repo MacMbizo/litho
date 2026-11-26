@@ -105,6 +105,13 @@ const dot = (a: Float32Array, b: Float32Array) => {
 };
 
 export type Embedder = (inputs: string[]) => Promise<number[][]>;
+
+/** A build stopped on purpose (another project's index took over); not a failure. */
+export class IndexCancelled extends Error {
+  constructor() {
+    super('Indexing paused');
+  }
+}
 export interface IndexProgress {
   done: number;
   total: number;
@@ -139,9 +146,17 @@ export class ProjectIndex {
 
   /**
    * Embeds every document not already in the cache (batched), then holds all vectors in memory.
-   * Throws on embedder failure, so the caller can fall back to keywords.
+   * Throws on embedder failure, so the caller can fall back to keywords. `shouldStop` is checked between
+   * batches: when it returns true this throws IndexCancelled, keeping everything embedded so far in the
+   * disk cache, so a later build resumes where this one stopped.
    */
-  async embedAll(model: string, embed: Embedder, cache: VectorCache, onProgress?: (p: IndexProgress) => void): Promise<void> {
+  async embedAll(
+    model: string,
+    embed: Embedder,
+    cache: VectorCache,
+    onProgress?: (p: IndexProgress) => void,
+    shouldStop?: () => boolean
+  ): Promise<void> {
     const pending: Array<{ doc: PipelineDoc; hash: string; chunks: string[] }> = [];
     for (const doc of this.docs) {
       const hash = hashText(`${doc.title}\n${doc.path}\n${doc.body}`);
@@ -157,6 +172,7 @@ export class ProjectIndex {
     const results = new Map<(typeof pending)[number], number[][]>();
     const flush = async () => {
       if (!batch.length) return;
+      if (shouldStop?.()) throw new IndexCancelled();
       const out = await embed(batch.map((b) => `search_document: ${b.text}`));
       batch.forEach((b, i) => {
         const list = results.get(b.item) || [];

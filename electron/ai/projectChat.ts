@@ -11,7 +11,7 @@
  */
 import path from 'path';
 import { CardCache, condense, type Condensed } from './condenser';
-import { EMBED_MODEL, ProjectIndex, VectorCache, hashText, type Hit, type PipelineDoc } from './finder';
+import { EMBED_MODEL, IndexCancelled, ProjectIndex, VectorCache, hashText, type Hit, type PipelineDoc } from './finder';
 import type { AIGateway } from './gateway';
 import type { AIProvider, ChatTurn, CompletionResult } from './types';
 
@@ -112,6 +112,10 @@ export function buildUserMessage(opts: {
 export class ProjectChat {
   private indexes = new Map<string, { index: ProjectIndex; signature: string }>();
   private building = new Map<string, { signature: string; promise: Promise<IndexSummary> }>();
+  private generation = 0;
+  /** Questions being answered right now, and index builds waiting for them to finish. */
+  private asking = 0;
+  private waiters: Array<() => void> = [];
   private vectors: VectorCache;
   private cards: CardCache;
 
@@ -143,6 +147,9 @@ export class ProjectChat {
   }
 
   private async build(key: string, signature: string, docs: PipelineDoc[], onProgress?: (p: ChatProgress) => void): Promise<IndexSummary> {
+    // Only the newest build embeds: one local GPU can't serve two big builds and a question at once.
+    // An older build pauses at its next batch; its vectors are on disk, so it resumes cheaply later.
+    const generation = ++this.generation;
     const ollamaUrl = (await this.gateway.getConfig()).ollamaUrl;
     const index = new ProjectIndex(docs);
     index.reason = 'Still indexing, so this answer matched documents by keywords.';
@@ -153,12 +160,22 @@ export class ProjectChat {
     else if (!embedModel) index.reason = `Matching by keywords. For matching by meaning, install ${EMBED_MODEL} in Ollama (ollama pull ${EMBED_MODEL}).`;
     else {
       try {
-        await index.embedAll(embedModel, (inputs) => this.ollama.embed(ollamaUrl, embedModel, inputs), this.vectors, (p) =>
-          onProgress?.({ stage: 'index', ...p })
+        await index.embedAll(
+          embedModel,
+          async (inputs) => {
+            await this.questionsDone();
+            return this.ollama.embed(ollamaUrl, embedModel, inputs);
+          },
+          this.vectors,
+          (p) => onProgress?.({ stage: 'index', ...p }),
+          () => generation !== this.generation
         );
       } catch (e: any) {
         index.mode = 'keywords';
-        index.reason = `Matching by keywords: embedding failed (${e?.message || e}).`;
+        index.reason =
+          e instanceof IndexCancelled
+            ? 'Indexing paused while another project was indexed; it resumes when you open this chat again.'
+            : `Matching by keywords: embedding failed (${e?.message || e}).`;
       }
     }
     return summary(index);
@@ -171,7 +188,29 @@ export class ProjectChat {
     while (this.indexes.size > 4) this.indexes.delete(this.indexes.keys().next().value!);
   }
 
+  /**
+   * Answers a question. While it runs, index builds pause between batches: the person is waiting on the
+   * answer, and a local GPU can't run embeddings, cards and the thinker at full speed together.
+   */
   async ask(
+    key: string,
+    input: { projectName: string; question: string; history: ChatTurn[]; facts: string },
+    onProgress?: (p: ChatProgress) => void
+  ): Promise<AskResult> {
+    this.asking++;
+    try {
+      return await this.answer(key, input, onProgress);
+    } finally {
+      if (--this.asking === 0) this.waiters.splice(0).forEach((resume) => resume());
+    }
+  }
+
+  /** Resolves once no question is being answered. */
+  private async questionsDone(): Promise<void> {
+    while (this.asking > 0) await new Promise<void>((resume) => this.waiters.push(resume));
+  }
+
+  private async answer(
     key: string,
     input: { projectName: string; question: string; history: ChatTurn[]; facts: string },
     onProgress?: (p: ChatProgress) => void

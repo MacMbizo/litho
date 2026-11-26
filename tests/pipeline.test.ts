@@ -5,7 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { ProjectIndex, VectorCache, chunkDoc, keywordSearch, MAX_CHUNKS_PER_DOC, type PipelineDoc } from '../electron/ai/finder.ts';
-import { CardCache, WHOLE_DOC_CHARS, condense, excerptCard } from '../electron/ai/condenser.ts';
+import { CardCache, MAX_NEW_CARDS, WHOLE_DOC_CHARS, condense, excerptCard } from '../electron/ai/condenser.ts';
 import { ProjectChat, buildUserMessage, strongHits, validateDocs, type OllamaDeps } from '../electron/ai/projectChat.ts';
 import { AIGateway, type Providers } from '../electron/ai/gateway.ts';
 import { KeyStore, type Cipher } from '../electron/ai/keyStore.ts';
@@ -128,6 +128,28 @@ test('condense: short docs whole, long docs carded once (cached), excerpts when 
     assert.strictEqual(failing[0].kind, 'excerpt');
     assert.ok(excerptCard(long, 'how do users sign in').includes('magic links'));
     assert.ok(excerptCard(long, 'q').startsWith('Sections: Plan · Database · Login'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('condense writes at most MAX_NEW_CARDS new cards per question; cached cards are always used', async () => {
+  const dir = tmp();
+  try {
+    const cache = new CardCache(dir);
+    const longs = Array.from({ length: 7 }, (_, i) => doc(`l${i}`, `Long doc ${i}. ${'detail '.repeat(800)}`));
+    let writes = 0;
+    const write = async () => `CARD ${++writes}`;
+    const first = await condense(longs, 'q', { model: 'm', write, cache });
+    assert.strictEqual(writes, MAX_NEW_CARDS);
+    assert.deepStrictEqual(
+      first.map((c) => c.kind),
+      [...Array(MAX_NEW_CARDS).fill('card'), ...Array(7 - MAX_NEW_CARDS).fill('excerpt')]
+    );
+    // Next question: the cached cards are reused for free, and new ones are written for the rest.
+    const second = await condense(longs, 'q', { model: 'm', write, cache });
+    assert.strictEqual(writes, 7);
+    assert.ok(second.every((c) => c.kind === 'card'));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -304,6 +326,80 @@ test('ProjectChat answers while indexing (by keywords), and reuses one build for
     const after = await chat.ask('P', { projectName: 'Demo', question: 'database query', history: [], facts: '' });
     assert.strictEqual(after.mode, 'embeddings');
     assert.strictEqual(after.reason, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ProjectChat: a new project build pauses an older one, which resumes from the cache later', async () => {
+  let releaseA!: () => void;
+  const gateA = new Promise<void>((r) => (releaseA = r));
+  const embedded: string[] = [];
+  const many = Array.from({ length: 200 }, (_, i) => doc(`a${i}`, `Doc ${i} about database query ${i}. ${'filler text '.repeat(150)}`));
+  const { dir, gw, chat } = chatSetup(
+    { complete: async (_p, _k, _u, r) => ({ text: 'ok', model: r.model }), models: async () => [] },
+    {
+      embed: async (_u, _m, inputs) => {
+        embedded.push(...inputs);
+        if (inputs.some((t) => t.includes('Doc 0 '))) await gateA; // hold project A's first batch
+        return fakeEmbed([])(inputs);
+      },
+    }
+  );
+  try {
+    await gw.setConfig({ provider: 'ollama', models: { ollama: 'llama3.2:latest' } });
+    const a = chat.index('A', many);
+    await new Promise((r) => setTimeout(r, 20));
+    const b = await chat.index('B', projectDocs); // starts while A is mid-build
+    assert.deepStrictEqual(b, { docs: 3, mode: 'embeddings' });
+    releaseA();
+    const aResult = await a;
+    assert.strictEqual(aResult.mode, 'keywords');
+    assert.match(aResult.reason!, /Indexing paused/);
+    const aBatchesBefore = embedded.filter((t) => /Doc \d+ about/.test(t)).length;
+    assert.ok(aBatchesBefore < many.length * 2, 'A stopped instead of embedding everything');
+    // Back to A: it resumes, embedding only what the cache lacks.
+    const again = await chat.index('A', many);
+    assert.strictEqual(again.mode, 'embeddings');
+    const aTotal = embedded.filter((t) => /Doc \d+ about/.test(t)).length;
+    assert.ok(aTotal - aBatchesBefore < many.length * 2, 'cached vectors were reused');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ProjectChat: index batches wait while a question is answered', async () => {
+  const events: string[] = [];
+  const many = Array.from({ length: 300 }, (_, i) => doc(`m${i}`, `Doc ${i} about login flows. ${'more words '.repeat(120)}`));
+  const { dir, gw, chat } = chatSetup(
+    {
+      complete: async (_p, _k, _u, r) => {
+        events.push('think-start');
+        await new Promise((res) => setTimeout(res, 60));
+        events.push('think-end');
+        return { text: 'ok', model: r.model };
+      },
+      models: async () => [],
+    },
+    {
+      embed: async (_u, _m, inputs) => {
+        if (!inputs[0].startsWith('search_query')) events.push('batch');
+        await new Promise((res) => setTimeout(res, 15));
+        return fakeEmbed([])(inputs);
+      },
+    }
+  );
+  try {
+    await gw.setConfig({ provider: 'ollama', models: { ollama: 'llama3.2:latest' } });
+    const building = chat.index('P', many);
+    while (!events.includes('batch')) await new Promise((r) => setTimeout(r, 5));
+    await chat.ask('P', { projectName: 'Demo', question: 'login', history: [], facts: '' });
+    await building;
+    const start = events.indexOf('think-start');
+    const end = events.indexOf('think-end');
+    assert.ok(start > 0 && end > start);
+    assert.ok(!events.slice(start, end).includes('batch'), `no index batch while answering: ${events.slice(start, end + 1).join(',')}`);
+    assert.ok(events.slice(end).includes('batch'), 'indexing resumed afterwards');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

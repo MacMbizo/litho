@@ -76,17 +76,27 @@ export function excerptCard(doc: PipelineDoc, question: string): string {
 }
 
 /**
+ * New cards written for one question, at most. Each takes 5–10 s on a laptop GPU; the best hits come
+ * first, so later long hits use a cached card if there is one, else an instant excerpt. Cards accumulate
+ * in the cache, so later questions get more of them. (Measured: 8 new cards made a first question on a
+ * 3,000-doc project take 50–80 s.)
+ */
+export const MAX_NEW_CARDS = 4;
+
+/**
  * Condenses the hits in order. Cards are written one at a time (a local GPU runs one model at a time);
  * a failing card model drops to excerpt cards for the rest instead of failing the question.
  */
 export async function condense(
   docs: PipelineDoc[],
   question: string,
-  opts: { model?: string; write?: CardWriter; cache: CardCache; onProgress?: (done: number, total: number) => void }
+  opts: { model?: string; write?: CardWriter; cache: CardCache; onProgress?: (done: number, total: number) => void; maxNewCards?: number }
 ): Promise<Condensed[]> {
   const out: Condensed[] = [];
   const long = docs.filter((d) => d.body.length > WHOLE_DOC_CHARS);
   let done = 0;
+  let written = 0;
+  const maxNew = opts.maxNewCards ?? MAX_NEW_CARDS;
   let writer = opts.model && opts.write ? opts.write : undefined;
   if (long.length) opts.onProgress?.(0, long.length);
   for (const doc of docs) {
@@ -98,7 +108,8 @@ export async function condense(
     if (writer && opts.model) {
       const hash = hashText(`${CARD_SYSTEM}\n${doc.path}\n${doc.body}`);
       card = await opts.cache.get(opts.model, hash);
-      if (!card) {
+      if (!card && written < maxNew) {
+        written++;
         try {
           const raw = (await writer(CARD_SYSTEM, `Document: ${doc.path}\nTitle: ${doc.title}\n\n${doc.body.slice(0, CARD_INPUT_CHARS)}`)).trim();
           if (raw) {

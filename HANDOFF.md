@@ -65,7 +65,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (158) | `npm test` |
+| Unit tests (161) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -163,7 +163,8 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 ## Not verified / known gaps
 
-- **Untested:** the "Choose folder" dialog (the root was set by script) and light theme.
+- **Untested:** the "Choose folder" dialog (the root was set by script).
+- **Light theme does not exist (checked 2026-11-26):** the sidebar's theme toggle only swaps a `dark`/`light` class and its icon. There are no light styles (`index.css` has no `.light` rules, Tailwind `dark:` variants are unused) and components use fixed dark hex colours, so nothing changes. Pre-existing from the original build. Options for the owner: hide the toggle until a light theme is designed, or design one (a whole-app job: move colours to theme tokens).
 - **Phone width:** the existing fixed sidebar fills the screen. Not a target, since the Electron window's minimum width is 960px.
 - **Unchecked claim:** "store Expo Go only runs the newest SDK" comes from memory, not from Expo's docs.
 - **App state:** portfolio root `C:\Prj`, snapshot saved, last workspace `C:\Prj\F4` (e2e runs restore it). No project files were modified by tests.
@@ -368,7 +369,11 @@ The owner's standard: every project has a README that says what it is, a git rep
      - **UI:** the drawer shows index status, live stages (indexing, finding, cards, thinking), a run line, and renders answers with `ChatMarkdown.tsx` (React elements only, no HTML injection). The browser build keeps the old keyword path.
      - **Scale (agent-skills, 3,445 docs, 28M chars, read-only):** first index 182 s, later 4.5 s, search 41 ms, cache 36 MB.
      - **Verified:** 148 unit tests, including the real SDK tool loop against a stub server (tool_use → tool_result on the wire, usage summed, round cap with `tool_choice: none`), answering mid-index, and the Markdown renderer's injection safety. Electron e2e 13/13 on a fixture Notes folder with real `nomic-embed-text` + `llama3.2` (index by meaning, 5 vectors cached, SQLite answer from a doc card, 1 card cached and reused, follow-up, sources filtered, chip opens the doc, no console errors). Personas e2e still 18/18. Scripts: `scratchpad/e2e/e2e-pipeline.cjs`, `scratchpad/scale/scale.ts` (not in the repo).
-     - **Not verified:** a real Claude answer and its `read_doc` use (needs the key); a full index of a real project inside the app (only by script); light theme.
+     - **Big project in the app (2026-11-26, `tests/e2e/e2e-bigproject.cjs`, 6/6):** a copy of agent-skills (3,287 docs after the scan's own skips) as the Notes folder, `qwen3.5:4b`: index 212 s, a question during indexing 52 s (keywords, says so), after indexing 43 s (by meaning), no frame over 75 ms the whole time, reopening the chat instant, app memory ~1.25 GB. Three fixes came out of it:
+       - **One build at a time:** a newer index build (any project) pauses older ones at their next batch (`IndexCancelled`); their vectors are on disk, so they resume cheaply when that chat opens again.
+       - **Questions first:** while a question is answered, index batches wait (`questionsDone`), so a mid-index question isn't starved by embeddings (was 130 s).
+       - **At most 4 new cards per question** (`MAX_NEW_CARDS`); cached cards are always used, so later questions get more cards for free.
+     - **Not verified:** a real Claude answer and its `read_doc` use (needs the key).
      - **Known limits:** llama3.2 (3B) is a weak thinker for subtle questions; Claude is the intended thinker. Caches never shrink (about 10 KB per doc version). Chunking reads only the first ~6k chars of each doc for matching; the thinker can still read the rest.
    - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
    - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.
