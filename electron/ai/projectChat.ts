@@ -23,8 +23,11 @@ const INLINE_DOC_CHARS = 12000;
 const LISTED_DOCS = 150;
 export const MAX_INDEX_DOCS = 10000;
 export const MAX_INDEX_CHARS = 60_000_000;
-/** Preferred local model for doc cards: small and quick on a laptop GPU. */
-export const CARD_MODEL = 'llama3.2:latest';
+/**
+ * Local models for doc cards, best first (measured 2026-11-26 on an 8 GB GPU): qwen3.5:4b writes specific,
+ * faithful cards; llama3.2 is quicker to load but mis-states purposes and invents open questions.
+ */
+export const CARD_MODELS = ['qwen3.5:4b', 'llama3.2:latest'];
 
 export type ChatStage = 'index' | 'find' | 'cards' | 'think';
 export interface ChatProgress {
@@ -185,9 +188,9 @@ export class ProjectChat {
       .search(input.question, TOP_DOCS, embedModel ? (inputs) => this.ollama.embed(config.ollamaUrl, embedModel, inputs) : undefined)
       .catch(() => index.search(input.question, TOP_DOCS)); // embeddings went away: keywords
 
-    // Cards come from a small local model: llama3.2 if installed, else the Ollama model chosen in Settings.
+    // Cards come from a small local model: the best installed one, else the Ollama model chosen in Settings.
     const chosen = config.models.ollama;
-    const cardModel = installed?.includes(CARD_MODEL) ? CARD_MODEL : chosen && installed?.includes(chosen) ? chosen : undefined;
+    const cardModel = CARD_MODELS.find((m) => installed?.includes(m)) || (chosen && installed?.includes(chosen) ? chosen : undefined);
     const condensed = await condense(
       hits.map((h) => h.doc),
       input.question,

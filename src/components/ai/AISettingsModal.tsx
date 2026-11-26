@@ -36,10 +36,11 @@ const personaSize = (p: PersonaInfo) => `${p.words.toLocaleString('en-US')} word
 const sameFolder = (a: string | null, b: string | null) =>
   Boolean(a && b) && a!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase() === b!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
 
-const PROVIDERS: Array<{ id: AIProvider; label: string; sub: string; Icon: React.FC<{ className?: string }>; keyHint?: string }> = [
-  { id: 'claude', label: 'Claude', sub: 'Anthropic', Icon: Cloud, keyHint: 'sk-ant-…' },
-  { id: 'gemini', label: 'Gemini', sub: 'Google', Icon: Cloud, keyHint: 'AIza…' },
-  { id: 'openai', label: 'OpenAI', sub: 'GPT models', Icon: Cloud, keyHint: 'sk-…' },
+const PROVIDERS: Array<{ id: AIProvider; label: string; sub: string; Icon: React.FC<{ className?: string }>; keyHint?: string; sentTo?: string }> = [
+  { id: 'claude', label: 'Claude', sub: 'Anthropic', Icon: Cloud, keyHint: 'sk-ant-…', sentTo: 'Anthropic' },
+  { id: 'gemini', label: 'Gemini', sub: 'Google', Icon: Cloud, keyHint: 'AIza…', sentTo: 'Google' },
+  { id: 'openai', label: 'OpenAI', sub: 'GPT models', Icon: Cloud, keyHint: 'sk-…', sentTo: 'OpenAI' },
+  { id: 'openrouter', label: 'OpenRouter', sub: 'Many models', Icon: Cloud, keyHint: 'sk-or-…', sentTo: 'OpenRouter and the provider of the model you pick' },
   { id: 'ollama', label: 'Ollama', sub: 'On this PC', Icon: Cpu },
 ];
 
@@ -284,7 +285,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
               {/* Provider */}
               <div className="space-y-2">
                 <label className="font-semibold text-neutral-300 block">AI provider</label>
-                <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="AI provider">
+                <div className="grid grid-cols-5 gap-2" role="radiogroup" aria-label="AI provider">
                   {PROVIDERS.map(({ id, label, sub, Icon }) => {
                     const ready = id === 'ollama' || keys?.[id as 'claude']?.set;
                     return (
@@ -348,7 +349,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
                     )}
                     {keyError && <p className="text-rose-300 text-[11px]">{keyError}</p>}
                     <p className="text-[10px] text-neutral-500 leading-relaxed">
-                      Encrypted with Windows' secure storage and used only by this app to call {meta.label}. Documents you ask about are sent to {meta.sub === 'GPT models' ? 'OpenAI' : meta.sub}.
+                      Encrypted with Windows' secure storage and used only by this app to call {meta.label}. Documents you ask about are sent to {meta.sentTo}.
                     </p>
                   </div>
                 )}

@@ -183,7 +183,7 @@ ipcMain.handle('ai:clearKey', async (_, provider: unknown) => {
   return aiKeys.status();
 });
 ipcMain.handle('ai:listModels', (_, provider: unknown) => {
-  if (!['claude', 'gemini', 'openai', 'ollama'].includes(provider as string)) throw new Error('Invalid provider');
+  if (!['claude', 'gemini', 'openai', 'openrouter', 'ollama'].includes(provider as string)) throw new Error('Invalid provider');
   return aiGateway.listModels(provider as any);
 });
 ipcMain.handle('ai:migrateLegacy', (_, legacy: unknown) => aiGateway.migrateLegacy(legacy && typeof legacy === 'object' ? (legacy as any) : {}));

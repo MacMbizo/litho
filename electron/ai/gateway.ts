@@ -8,19 +8,19 @@ import path from 'path';
 import type { KeyStore } from './keyStore';
 import { isCloudProvider } from './keyStore';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_FALLBACK_MODELS, claudeComplete, claudeConverse, claudeModels } from './claude';
-import { geminiComplete, geminiConverse, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels, suggestGeminiModel, suggestOllamaModel } from './otherProviders';
+import { geminiComplete, geminiConverse, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels, openrouterComplete, openrouterModels, suggestGeminiModel, suggestOllamaModel } from './otherProviders';
 import { addStarterPersonas, createPersona, isPersonaId, listPersonas, readPersona, type PersonaInfo } from './personas';
 import { AI_TASKS, TASK_EFFORT, type ChatTurn, type ConverseRequest, type DocReader, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
 
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'claude',
-  models: { claude: CLAUDE_DEFAULT_MODEL, gemini: '', openai: '', ollama: '' },
+  models: { claude: CLAUDE_DEFAULT_MODEL, gemini: '', openai: '', openrouter: '', ollama: '' },
   ollamaUrl: 'http://localhost:11434',
   personas: {},
   cacheTtl: '5m',
 };
 
-const PROVIDERS: AIProvider[] = ['claude', 'gemini', 'openai', 'ollama'];
+const PROVIDERS: AIProvider[] = ['claude', 'gemini', 'openai', 'openrouter', 'ollama'];
 const isProvider = (p: unknown): p is AIProvider => typeof p === 'string' && (PROVIDERS as string[]).includes(p);
 
 /** Settings from disk or the renderer, reduced to known fields with sane values. */
@@ -64,11 +64,24 @@ export interface Providers {
 export const realProviders: Providers = {
   converse: { claude: claudeConverse, gemini: geminiConverse },
   complete: (p, key, url, req) =>
-    p === 'claude' ? claudeComplete(key!, req) : p === 'gemini' ? geminiComplete(key!, req) : p === 'openai' ? openaiComplete(key!, req) : ollamaComplete(url, req),
-  models: (p, key, url) => (p === 'claude' ? claudeModels(key!) : p === 'gemini' ? geminiModels(key!) : p === 'openai' ? openaiModels(key!) : ollamaModels(url)),
+    ({
+      claude: () => claudeComplete(key!, req),
+      gemini: () => geminiComplete(key!, req),
+      openai: () => openaiComplete(key!, req),
+      openrouter: () => openrouterComplete(key!, req),
+      ollama: () => ollamaComplete(url, req),
+    })[p](),
+  models: (p, key, url) =>
+    ({
+      claude: () => claudeModels(key!),
+      gemini: () => geminiModels(key!),
+      openai: () => openaiModels(key!),
+      openrouter: () => openrouterModels(key!),
+      ollama: () => ollamaModels(url),
+    })[p](),
 };
 
-const LABEL: Record<AIProvider, string> = { claude: 'Claude', gemini: 'Gemini', openai: 'OpenAI', ollama: 'Ollama' };
+const LABEL: Record<AIProvider, string> = { claude: 'Claude', gemini: 'Gemini', openai: 'OpenAI', openrouter: 'OpenRouter', ollama: 'Ollama' };
 
 export class AIGateway {
   constructor(

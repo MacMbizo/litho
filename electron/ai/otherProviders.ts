@@ -17,6 +17,7 @@ async function readError(res: Response): Promise<string> {
 function friendly(provider: string, status: number, detail: string): string {
   if (status === 401 || status === 403) return `${provider} rejected the API key. Check it in AI Settings.`;
   if (status === 404) return `${provider}: that model was not found. Pick another in AI Settings.`;
+  if (status === 402) return `${provider}: this key has run out of credit.`;
   if (status === 429) return `${provider} is rate limiting this key. Try again in a moment.`;
   return `${provider} error ${status}: ${detail}`;
 }
@@ -181,9 +182,10 @@ export function suggestGeminiModel(models: ModelOption[]): string | undefined {
 
 // --- OpenAI -----------------------------------------------------------------------
 
-export async function openaiComplete(apiKey: string, req: CompletionRequest): Promise<CompletionResult> {
-  if (!req.model) throw new Error('Pick an OpenAI model in AI Settings.');
-  const data = await call('OpenAI', 'https://api.openai.com/v1/chat/completions', {
+/** One request to an OpenAI-style /chat/completions endpoint (OpenAI itself, or OpenRouter). */
+async function chatCompletions(label: string, url: string, apiKey: string, req: CompletionRequest): Promise<CompletionResult> {
+  if (!req.model) throw new Error(`Pick ${/^[AEIOU]/.test(label) ? 'an' : 'a'} ${label} model in AI Settings.`);
+  const data = await call(label, url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
@@ -194,7 +196,10 @@ export async function openaiComplete(apiKey: string, req: CompletionRequest): Pr
       ],
     }),
   });
+  // OpenRouter can report an upstream failure inside a 200 response.
+  if (data?.error) throw new Error(`${label}: ${data.error.message || data.error}`);
   const choice = data?.choices?.[0];
+  if (!choice) throw new Error(`${label} returned no answer.`);
   return {
     text: choice?.message?.content || '',
     model: data?.model || req.model,
@@ -203,6 +208,40 @@ export async function openaiComplete(apiKey: string, req: CompletionRequest): Pr
       ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0, cacheRead: data.usage.prompt_tokens_details?.cached_tokens ?? 0 }
       : undefined,
   };
+}
+
+export const openaiComplete = (apiKey: string, req: CompletionRequest) => chatCompletions('OpenAI', 'https://api.openai.com/v1/chat/completions', apiKey, req);
+
+// --- OpenRouter (one key, many providers' models; for exploring) --------------------
+
+let OPENROUTER = 'https://openrouter.ai/api/v1';
+/** Tests point OpenRouter calls at a local stub. */
+export function setOpenRouterBaseForTests(url: string) {
+  OPENROUTER = url;
+}
+
+export const openrouterComplete = (apiKey: string, req: CompletionRequest) => chatCompletions('OpenRouter', `${OPENROUTER}/chat/completions`, apiKey, req);
+
+const perMillion = (perToken: unknown) => {
+  const n = Number(perToken);
+  return Number.isFinite(n) ? n * 1e6 : NaN;
+};
+
+/** The live catalogue: text models only, labelled with their price per million tokens (or "free"). */
+export async function openrouterModels(apiKey: string): Promise<ModelOption[]> {
+  const data = await call('OpenRouter', `${OPENROUTER}/models`, { headers: { Authorization: `Bearer ${apiKey}` } }, 20_000);
+  return (data?.data || [])
+    .filter((m: any) => {
+      const out = m?.architecture?.output_modalities;
+      return typeof m?.id === 'string' && (!Array.isArray(out) || out.includes('text'));
+    })
+    .map((m: any) => {
+      const input = perMillion(m.pricing?.prompt);
+      const output = perMillion(m.pricing?.completion);
+      const price = input === 0 && output === 0 ? 'free' : Number.isFinite(input) && Number.isFinite(output) ? `$${+input.toFixed(2)}/$${+output.toFixed(2)} per M` : '';
+      return { id: m.id, label: `${m.name || m.id}${price ? ` · ${price}` : ''}` };
+    })
+    .sort((a: ModelOption, b: ModelOption) => a.label.localeCompare(b.label));
 }
 
 export async function openaiModels(apiKey: string): Promise<ModelOption[]> {
@@ -227,28 +266,44 @@ export function checkOllamaUrl(url: string): string {
   return u.origin;
 }
 
+/**
+ * Thinking models (qwen3, qwen3.5, …) think by default in Ollama, which measured 20–26 s instead of 0.5 s
+ * for a one-sentence answer. So low and medium effort turn it off (safe on every model); high effort asks
+ * for it. Models that can't think reject `think: true`, so that is retried without it.
+ */
+const ollamaThink = (effort: CompletionRequest['effort']) => effort === 'high';
+
 export async function ollamaComplete(baseUrl: string, req: CompletionRequest): Promise<CompletionResult> {
   if (!req.model) throw new Error('Pick an Ollama model in AI Settings.');
-  const data = await call('Ollama', `${checkOllamaUrl(baseUrl)}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: req.model,
-      stream: false,
-      // Sized to the prompt, so a long persona is never silently cut.
-      options: { num_ctx: ollamaContextFor(systemWithPersona(req).length + req.user.length) },
-      messages: [
-        { role: 'system', content: systemWithPersona(req) },
-        { role: 'user', content: req.user },
-      ],
-    }),
-  }, 600_000).catch((e: Error) => {
-    if (/Could not reach Ollama/.test(e.message)) throw new Error(`Ollama is not running at ${baseUrl}. Start it, then try again.`);
-    // A model too big for the GPU at this context size fails to start (seen with qwen3-coder:30b on 8 GB).
-    if (/out of memory|out-of-memory/i.test(e.message))
-      throw new Error(`Ollama ran out of memory loading ${req.model} for a prompt this long. Pick a smaller model in AI Settings, or close other GPU apps.`);
-    throw e;
-  });
+  const send = (think: boolean | undefined) =>
+    call('Ollama', `${checkOllamaUrl(baseUrl)}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: req.model,
+        stream: false,
+        ...(think === undefined ? {} : { think }),
+        // Sized to the prompt, so a long persona is never silently cut.
+        options: { num_ctx: ollamaContextFor(systemWithPersona(req).length + req.user.length) },
+        messages: [
+          { role: 'system', content: systemWithPersona(req) },
+          { role: 'user', content: req.user },
+        ],
+      }),
+    }, 600_000);
+  const think = ollamaThink(req.effort);
+  const data = await send(think)
+    .catch((e: Error) => {
+      if (think && /does not support thinking/i.test(e.message)) return send(undefined);
+      throw e;
+    })
+    .catch((e: Error) => {
+      if (/Could not reach Ollama/.test(e.message)) throw new Error(`Ollama is not running at ${baseUrl}. Start it, then try again.`);
+      // A model too big for the GPU at this context size fails to start (seen with qwen3-coder:30b on 8 GB).
+      if (/out of memory|out-of-memory/i.test(e.message))
+        throw new Error(`Ollama ran out of memory loading ${req.model} for a prompt this long. Pick a smaller model in AI Settings, or close other GPU apps.`);
+      throw e;
+    });
   return {
     text: data?.message?.content || '',
     model: data?.model || req.model,
@@ -265,12 +320,18 @@ export async function ollamaModels(baseUrl: string): Promise<ModelOption[]> {
     .map((m: any) => ({ id: m.name, label: `${m.name}${m.details?.parameter_size ? ` (${m.details.parameter_size})` : ''}` }));
 }
 
+export const OLLAMA_PREFERRED = ['qwen3.5:4b'];
+
 /**
- * A default Ollama model for answering, from the installed list: the largest general-purpose model of at
+ * A default Ollama model for answering, from the installed list: a measured favourite if installed, else the largest general-purpose model of at
  * most 9B parameters (fits an 8 GB GPU with room for a long context). Coding and reasoning models are
  * skipped when a general one exists: they answer document questions worse or far slower.
  */
 export function suggestOllamaModel(models: ModelOption[]): string | undefined {
+  // Measured best for document questions on an 8 GB GPU (2026-11-26): accurate, says when docs don't
+  // cover something, ~10 s per answer. qwen3:8b was slower and invented a price.
+  const preferred = OLLAMA_PREFERRED.find((p) => models.some((m) => m.id === p));
+  if (preferred) return preferred;
   const size = (m: ModelOption) => parseFloat(m.label.match(/\((\d+(?:\.\d+)?)B\)/i)?.[1] || 'NaN');
   const special = (id: string) => /(coder|code|r1|reason|embed|vision|-vl|math)/i.test(id);
   const fits = models.filter((m) => !special(m.id) && size(m) <= 9).sort((a, b) => size(b) - size(a));

@@ -17,7 +17,7 @@ fs.mkdirSync(path.join(notes, 'docs'), { recursive: true });
 fs.writeFileSync(path.join(ud, 'docatlas', 'notes.json'), JSON.stringify({ folder: notes, externalPaths: [] }));
 fs.writeFileSync(
   path.join(ud, 'docatlas', 'ai-config.json'),
-  JSON.stringify({ provider: 'ollama', models: { claude: 'claude-opus-5-5', gemini: '', openai: '', ollama: 'llama3.2:latest' }, ollamaUrl: 'http://localhost:11434' })
+  JSON.stringify({ provider: 'ollama', models: { claude: 'claude-opus-5-5', gemini: '', openai: '', openrouter: '', ollama: process.env.E2E_OLLAMA_MODEL || 'qwen3.5:4b' }, ollamaUrl: 'http://localhost:11434' })
 );
 
 const filler = (topic, n) =>
@@ -99,6 +99,23 @@ const countFiles = (d) => {
     check('source chip opens the doc', /Harbor architecture/.test(await win.locator('body').innerText()));
 
     await win.screenshot({ path: OUT + '/pipeline-after.png' });
+
+    // Settings: five providers; an OpenRouter key is stored encrypted, never in plain text or the config.
+    await win.getByText('AI & Settings').click();
+    const tiles = await win.getByRole('radiogroup', { name: 'AI provider' }).getByRole('radio').allInnerTexts();
+    check('five provider tiles incl. OpenRouter', tiles.length === 5 && tiles.some((t) => /OpenRouter/.test(t)), tiles.map((t) => t.split('\n')[0]).join(', '));
+    check('Ollama model shown as qwen3.5:4b', (await win.getByLabel('Model', { exact: true }).inputValue()) === (process.env.E2E_OLLAMA_MODEL || 'qwen3.5:4b'));
+    await win.getByRole('radio', { name: /OpenRouter/ }).click();
+    await win.getByLabel('OpenRouter API key').fill('sk-or-v1-FAKEKEYFORTEST9z9z');
+    await win.getByRole('button', { name: 'Save key' }).click();
+    await win.getByTestId('ai-key-saved').waitFor({ timeout: 5000 });
+    check('OpenRouter key saved, last 4 shown', /••••9z9z/.test(await win.getByTestId('ai-key-saved').innerText()));
+    const keyFile = fs.readFileSync(path.join(ud, 'docatlas', 'ai-keys.bin'));
+    check('key encrypted on disk', !keyFile.toString('latin1').includes('FAKEKEYFORTEST'));
+    await win.getByText(/OpenRouter rejected the API key|Add a OpenRouter|OpenRouter error|Could not reach OpenRouter/).first().waitFor({ timeout: 20000 }).catch(() => {});
+    await win.locator('.max-w-lg').first().screenshot({ path: OUT + '/settings-openrouter.png' });
+    await win.getByRole('button', { name: 'Cancel' }).click();
+
     const real = errors.filter((e) => !/Autofill|DevTools/.test(e));
     check('no console errors', real.length === 0, real.slice(0, 3).join(' || '));
   } catch (e) {

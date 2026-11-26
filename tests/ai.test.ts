@@ -25,7 +25,7 @@ test('KeyStore encrypts keys, reports only set/last4, and clears', async () => {
   try {
     const file = path.join(dir, 'ai-keys.bin');
     const ks = new KeyStore(file, fakeCipher());
-    assert.deepStrictEqual(await ks.status(), { claude: { set: false }, gemini: { set: false }, openai: { set: false } });
+    assert.deepStrictEqual(await ks.status(), { claude: { set: false }, gemini: { set: false }, openai: { set: false }, openrouter: { set: false } });
     await ks.set('claude', '  sk-ant-api03-SECRETVALUE1234  ');
     assert.ok(!fs.readFileSync(file).toString('utf-8').includes('SECRETVALUE'), 'not stored in plain text');
     assert.deepStrictEqual((await ks.status()).claude, { set: true, last4: '1234' });

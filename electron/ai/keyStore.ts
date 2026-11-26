@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 
-export const CLOUD_PROVIDERS = ['claude', 'gemini', 'openai'] as const;
+export const CLOUD_PROVIDERS = ['claude', 'gemini', 'openai', 'openrouter'] as const;
 export type CloudProvider = (typeof CLOUD_PROVIDERS)[number];
 
 export interface Cipher {

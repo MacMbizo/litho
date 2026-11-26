@@ -9,7 +9,10 @@ import {
   geminiComplete,
   geminiConverse,
   ollamaComplete,
+  openrouterComplete,
+  openrouterModels,
   setGeminiBaseForTests,
+  setOpenRouterBaseForTests,
   suggestGeminiModel,
   suggestOllamaModel,
 } from '../electron/ai/otherProviders.ts';
@@ -166,6 +169,11 @@ test('suggestOllamaModel: largest general model that fits 8 GB, never a coder or
   ];
   assert.strictEqual(suggestOllamaModel(installed), 'llama3.2:latest');
   assert.strictEqual(suggestOllamaModel([...installed, { id: 'qwen3:8b', label: 'qwen3:8b (8.2B)' }]), 'qwen3:8b');
+  assert.strictEqual(
+    suggestOllamaModel([...installed, { id: 'qwen3:8b', label: 'qwen3:8b (8.2B)' }, { id: 'qwen3.5:4b', label: 'qwen3.5:4b (4.7B)' }]),
+    'qwen3.5:4b',
+    'the measured favourite beats a bigger model'
+  );
   assert.strictEqual(suggestOllamaModel(installed.slice(0, 3)), 'hf.co/apto-as/Qwen2.5-Coder-14B-Instruct-Q5_K_M-GGUF:Q5_K_M', 'only specials: the smallest');
 });
 
@@ -217,6 +225,56 @@ test('gateway uses Gemini\'s read_doc loop for the thinker, and inlines docs for
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('OpenRouter: priced text-model list, Bearer key, out-of-credit and in-body errors explained', async () => {
+  const seen = await stub(
+    (_b, n, url) => {
+      if (url === '/models')
+        return {
+          json: {
+            data: [
+              { id: 'acme/big', name: 'Acme Big', pricing: { prompt: '0.000003', completion: '0.000015' }, architecture: { output_modalities: ['text'] } },
+              { id: 'acme/free', name: 'Acme Free', pricing: { prompt: '0', completion: '0' }, architecture: { output_modalities: ['text'] } },
+              { id: 'acme/painter', name: 'Acme Painter', pricing: { prompt: '0', completion: '0' }, architecture: { output_modalities: ['image'] } },
+            ],
+          },
+        };
+      if (n === 2) return { json: { model: 'acme/big', choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 2 } } };
+      if (n === 3) return { status: 402, json: { error: { message: 'Insufficient credits' } } };
+      return { json: { error: { message: 'Upstream provider unavailable' } } };
+    },
+    async (base) => {
+      setOpenRouterBaseForTests(base);
+      assert.deepStrictEqual(await openrouterModels('sk-or-KEY'), [
+        { id: 'acme/big', label: 'Acme Big · $3/$15 per M' },
+        { id: 'acme/free', label: 'Acme Free · free' },
+      ]);
+      const r = { system: 's', user: 'u', model: 'acme/big', effort: 'low' as const };
+      assert.strictEqual((await openrouterComplete('sk-or-KEY', r)).text, 'hi');
+      await assert.rejects(openrouterComplete('sk-or-KEY', r), /OpenRouter: this key has run out of credit/);
+      await assert.rejects(openrouterComplete('sk-or-KEY', r), /OpenRouter: Upstream provider unavailable/);
+      await assert.rejects(openrouterComplete('sk-or-KEY', { ...r, model: '' }), /Pick an OpenRouter model/);
+    }
+  );
+  assert.strictEqual(seen[1].headers.authorization, 'Bearer sk-or-KEY');
+  assert.strictEqual(seen[1].url, '/chat/completions');
+});
+
+test('ollamaComplete: thinking off for low/medium effort; on for high, retried without on models that cannot think', async () => {
+  const seen = await stub(
+    (body) =>
+      body.think === true ? { status: 400, json: { error: '"llama3.2:latest" does not support thinking' } } : { json: { message: { content: 'ok' }, model: body.model } },
+    async (base) => {
+      const r = { system: 's', user: 'u', model: 'llama3.2:latest' };
+      assert.strictEqual((await ollamaComplete(base, { ...r, effort: 'medium' })).text, 'ok');
+      assert.strictEqual((await ollamaComplete(base, { ...r, effort: 'high' })).text, 'ok');
+    }
+  );
+  assert.deepStrictEqual(
+    seen.map((s) => s.body.think),
+    [false, true, undefined]
+  );
 });
 
 test('ollamaComplete turns a GPU out-of-memory failure into a plain sentence', async () => {

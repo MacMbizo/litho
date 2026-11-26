@@ -5,12 +5,12 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
 ## Start here (next session)
 
 - **Next task:** project 3, the **design suite from a PRD** (see "Next" below). The AI foundation is complete. Load the `claude-api` skill before writing Claude code.
+- **Owner's providers (2026-11-26):** Ollama now, probably Gemini, OpenRouter for exploring later; Claude optional. Their real `ai-config.json` was written with provider `ollama`, model `qwen3.5:4b` (the file didn't exist yet). See "Providers and local models" below.
 - **Waiting on the owner:**
-  - Add a real Claude key in AI & Settings. A real Claude answer has never been tested (no key was used, to avoid spending credit). With a key, check: project chat with the Software architect persona, ask twice within 5 minutes (the second says "N tokens from cache"), and a question that makes Claude read a doc (a green "read in full" source chip).
-  - Re-pick the Ollama model if they used Ollama before. The legacy `llama3` default isn't installed; `llama3.2` is.
+  - Add a Gemini key (and later an OpenRouter key) in AI & Settings. No real Gemini or OpenRouter answer has been tested (no keys); both are covered by stub-server tests. With a Gemini key, check: project chat asks a detailed question and shows a green "read in full" source chip, and Settings picked a current Flash model by itself.
+  - Optional: a Claude key. A real Claude answer has never been tested. With a key: Software architect persona, ask twice within 5 minutes (the second says "N tokens from cache").
   - Rotate the DrivingSchool Supabase `service_role` key if it was ever shared or pushed.
   - Decide whether DrivingSchool's `TEST_CREDENTIALS.md`, `fix-admin-password.js` and `reset-passwords.js` (test-account passwords) go into git.
-  - Choose whether to gitignore `.agents/`.
   - Decide on packaging (electron-builder) and the "Open with Litho" association.
 - **Changes made outside Litho this session:**
   - **DrivingSchool (not a git repo):**
@@ -65,7 +65,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (148) | `npm test` |
+| Unit tests (158) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -313,6 +313,21 @@ The owner's standard: every project has a README that says what it is, a git rep
     - E2E suites: gitignore 13/13, basics 19/19, fixes 17/17, queue 15/15.
     - A run on a copy of DrivingSchool: `.gitignore` fixed, the 7 key scripts and the credentials doc flagged, nothing committed.
 - **Idea not built:** an AI-written description, once project 2 exists.
+
+## Providers and local models (2026-11-26, branch `feat/provision-ollama-gemini`)
+
+- **Machine:** RTX 4060 8 GB VRAM, 31 GB RAM, Ollama 0.40.18. Local models are shared with the owner's other apps (Cairn etc.): keep good ones, delete only poor downloads.
+- **Installed Ollama models:** `qwen3.5:4b` (new, the default thinker and card writer), `llama3.2` (fallback card writer), `nomic-embed-text` (finder), `mxbai-embed-large`, plus the owner's older `qwen3-coder:30b`, Qwen2.5-Coder-14B and DeepSeek-R1-32B (left alone). `qwen3:8b` was downloaded, benchmarked and deleted.
+- **Benchmark** (real pipeline over Litho's own docs, 3 questions with known answers; 5/6 is the practical max because the price isn't in the inlined text):
+  - `qwen3.5:4b`: 5/6, 31 s total, honest about missing facts. **Chosen.** With thinking: 5/6, 44 s.
+  - `qwen3:8b`: 5/6, 70 s, **invented a price** with thinking off; with thinking 5/6, 101 s. Deleted.
+  - `llama3.2`: 2–4/6, once answered about the wrong topic. `Qwen2.5-Coder-14B`: ~5/6 but 41–72 s per answer (doesn't fit the GPU). `qwen3-coder:30b`: fails to load ("CUDA out of memory") at these context sizes.
+  - Scripts: `scratchpad/bench/bench.ts`, `cards.ts` (not in the repo).
+- **Ollama thinking:** thinking models think by default in Ollama (a one-line answer took 19–26 s instead of 0.5 s). `ollamaComplete` now sends `think: false` for low/medium effort and `think: true` for high (retried without it on models that can't think).
+- **Defaults picked from live lists** (`suggestGeminiModel`, `suggestOllamaModel`): when no model is set, the gateway picks one and saves it; Settings pre-selects it. Gemini: newest stable Flash, skipping preview/lite/image/live (Google lists Gemini 4 and 3.x; `gemini-2.5-flash`/`-pro` reroute on 2026-12-01). Ollama: `OLLAMA_PREFERRED` (`qwen3.5:4b`), else the largest general model ≤ 9B.
+- **Gemini thinker:** `geminiConverse` gives Gemini the `read_doc` tool as a function call over `generateContent`: model turns echoed unchanged (thought signatures), results as `functionResponse` in a user turn matched by `id`, thought parts never shown, thinking tokens counted as output, 5 rounds then "answer now" errors. Verified only against a stub of the REST shape; Google's docs now lead with an "Interactions API", and `functionCallingConfig` modes couldn't be confirmed, so they aren't used.
+- **OpenRouter:** a fifth provider (`openrouter`), OpenAI-compatible: key encrypted like the others, live catalogue of text models labelled with price per million tokens (or "free"), friendly 402 (out of credit) and in-body errors. No tool loop: the thinker inlines docs for it.
+- **Verified:** 158 unit tests; e2e pipeline 17/17 with `qwen3.5:4b` (now also checks five provider tiles and an encrypted OpenRouter key); personas e2e 18/18.
 
 ## Next: AI foundation (project 2), then design suite (project 3)
 

@@ -1,4 +1,4 @@
-export type AIProvider = 'claude' | 'gemini' | 'openai' | 'ollama';
+export type AIProvider = 'claude' | 'gemini' | 'openai' | 'openrouter' | 'ollama';
 export type Effort = 'low' | 'medium' | 'high';
 
 /** What a feature asks for: the gateway picks provider, model and key. */
