@@ -4,6 +4,7 @@ import { MarkdownFile, ViewMode, DocType, ProjectWorkspace, FileTreeNode } from 
 import { getSampleWorkspace } from './services/sampleVault';
 import { MarkdownService } from './services/markdown';
 import { ProjectScannerService } from './services/projectScanner';
+import { AIService } from './services/aiService';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopNav } from './components/layout/TopNav';
 import { TabBar } from './components/layout/TabBar';
@@ -340,6 +341,14 @@ const AppContent: React.FC = () => {
     },
     [applyPortfolioScan, toast]
   );
+
+  // API keys used to sit in localStorage in plain text: move them into the encrypted key store once.
+  useEffect(() => {
+    AIService.migrateLegacyKeys().then((moved) => {
+      if (moved.length) toast('AI keys secured', `Moved your ${moved.join(' and ')} key${moved.length === 1 ? '' : 's'} into encrypted storage`, 'success');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Restore previous project path and portfolio root if in Electron on first boot
   useEffect(() => {

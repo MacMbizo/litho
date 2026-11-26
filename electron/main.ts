@@ -6,6 +6,9 @@ import { FixController } from './fixRunner';
 import { readProjectBasics } from './projectBasics';
 import { BasicsController, ghStatus, gitUserName, planGitignore } from './basicsFixer';
 import { summarizeScan, type ProjectSummaryPayload } from '../src/services/projectSummary';
+import { safeStorage } from 'electron';
+import { KeyStore, isCloudProvider } from './ai/keyStore';
+import { AIGateway } from './ai/gateway';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -144,6 +147,36 @@ ipcMain.handle('basics:openUrl', async (_, url: string) => {
   if (typeof url !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/?$/.test(url)) throw new Error('Blocked URL');
   await shell.openExternal(url);
   return true;
+});
+
+// --- AI gateway: every model call runs here; API keys never reach the renderer -------------
+const aiKeys = new KeyStore(path.join(app.getPath('userData'), 'docatlas', 'ai-keys.bin'), safeStorage);
+const aiGateway = new AIGateway(path.join(app.getPath('userData'), 'docatlas', 'ai-config.json'), aiKeys);
+const AI_TASKS = new Set(['categorize', 'summarize', 'chat', 'agent']);
+const AI_MAX_PROMPT_CHARS = 3_000_000;
+
+ipcMain.handle('ai:getConfig', () => aiGateway.getConfig());
+ipcMain.handle('ai:setConfig', (_, config: unknown) => aiGateway.setConfig(config));
+ipcMain.handle('ai:keyStatus', () => aiKeys.status());
+ipcMain.handle('ai:setKey', async (_, provider: unknown, key: unknown) => {
+  if (!isCloudProvider(provider) || typeof key !== 'string') throw new Error('Invalid key');
+  await aiKeys.set(provider, key);
+  return aiKeys.status();
+});
+ipcMain.handle('ai:clearKey', async (_, provider: unknown) => {
+  if (!isCloudProvider(provider)) throw new Error('Invalid provider');
+  await aiKeys.clear(provider);
+  return aiKeys.status();
+});
+ipcMain.handle('ai:listModels', (_, provider: unknown) => {
+  if (!['claude', 'gemini', 'openai', 'ollama'].includes(provider as string)) throw new Error('Invalid provider');
+  return aiGateway.listModels(provider as any);
+});
+ipcMain.handle('ai:migrateLegacy', (_, legacy: unknown) => aiGateway.migrateLegacy(legacy && typeof legacy === 'object' ? (legacy as any) : {}));
+ipcMain.handle('ai:prompt', (_, req: any) => {
+  if (!req || !AI_TASKS.has(req.task) || typeof req.system !== 'string' || typeof req.user !== 'string') throw new Error('Invalid AI request');
+  if (req.system.length + req.user.length > AI_MAX_PROMPT_CHARS) throw new Error('That is too much text for one AI request.');
+  return aiGateway.prompt(req.task, req.system, req.user, req.provider ? { provider: req.provider } : undefined);
 });
 
 function createWindow() {

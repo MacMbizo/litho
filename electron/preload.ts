@@ -49,6 +49,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   basicsPlanGitignore: (projectRoot: string, repoPath?: string) => ipcRenderer.invoke('basics:planGitignore', projectRoot, repoPath),
   basicsRead: (roots: string[]) => ipcRenderer.invoke('basics:read', roots),
   basicsOpenUrl: (url: string) => ipcRenderer.invoke('basics:openUrl', url),
+  aiGetConfig: () => ipcRenderer.invoke('ai:getConfig'),
+  aiSetConfig: (config: unknown) => ipcRenderer.invoke('ai:setConfig', config),
+  aiKeyStatus: () => ipcRenderer.invoke('ai:keyStatus'),
+  aiSetKey: (provider: string, key: string) => ipcRenderer.invoke('ai:setKey', provider, key),
+  aiClearKey: (provider: string) => ipcRenderer.invoke('ai:clearKey', provider),
+  aiListModels: (provider: string) => ipcRenderer.invoke('ai:listModels', provider),
+  aiMigrateLegacy: (legacy: unknown) => ipcRenderer.invoke('ai:migrateLegacy', legacy),
+  aiPrompt: (req: unknown) => ipcRenderer.invoke('ai:prompt', req),
   onFsChanged: (callback: (data: any) => void) => {
     const listener = (_: unknown, data: any) => callback(data);
     ipcRenderer.on('fs:changed', listener);

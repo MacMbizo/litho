@@ -1,14 +1,11 @@
-export type AIProvider = 'ollama' | 'gemini' | 'openai';
+/**
+ * The renderer's door to AI. On the desktop app every call goes to the main-process gateway, which holds
+ * the API keys (encrypted with the OS keychain) and picks provider and model from AI Settings. The browser
+ * dev build has no gateway: it can use a local Ollama directly and nothing else, and stores no keys.
+ */
+import type { AIConfig, AIProvider, AITask, CompletionResult } from '../../electron/ai/types';
 
-export interface AIConfig {
-  provider: AIProvider;
-  ollamaUrl: string;
-  ollamaModel: string;
-  geminiApiKey: string;
-  geminiModel: string;
-  openaiApiKey: string;
-  openaiModel: string;
-}
+export type { AIConfig, AIProvider, AITask };
 
 export interface CategorizationResult {
   suggestedType: 'project' | 'agent' | 'skill' | 'document' | 'note';
@@ -18,163 +15,119 @@ export interface CategorizationResult {
   statusRecommendation?: 'Backlog' | 'In Progress' | 'Review' | 'Done' | 'Active' | 'Draft';
 }
 
+/** The pre-gateway config, which kept keys in localStorage. Read once to migrate, then removed. */
+const LEGACY_KEY = 'notion_markdown_ai_config';
+/** Browser dev build only: which local Ollama model and address to use. */
+const BROWSER_OLLAMA_KEY = 'litho_browser_ollama';
+
+const hasGateway = () => typeof window !== 'undefined' && typeof window.electronAPI?.aiPrompt === 'function';
+
 export class AIService {
-  private static DEFAULT_CONFIG_KEY = 'notion_markdown_ai_config';
-
-  static getConfig(): AIConfig {
-    const saved = localStorage.getItem(this.DEFAULT_CONFIG_KEY);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // fallback
-      }
-    }
-    return {
-      provider: 'ollama',
-      ollamaUrl: 'http://localhost:11434',
-      ollamaModel: 'llama3:latest',
-      geminiApiKey: '',
-      geminiModel: 'gemini-1.5-flash',
-      openaiApiKey: '',
-      openaiModel: 'gpt-4o-mini',
-    };
-  }
-
-  static saveConfig(config: AIConfig): void {
-    localStorage.setItem(this.DEFAULT_CONFIG_KEY, JSON.stringify(config));
+  static isDesktop(): boolean {
+    return hasGateway();
   }
 
   /**
-   * Check if Ollama is running and fetch available models
+   * Moves keys from the old localStorage config into the gateway's encrypted store, then deletes the old
+   * copy. Safe to call on every launch; does nothing once migrated.
    */
-  static async checkOllama(baseUrl: string = 'http://localhost:11434'): Promise<{ ok: boolean; models: string[] }> {
+  static async migrateLegacyKeys(): Promise<string[]> {
+    if (!hasGateway()) return [];
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return [];
     try {
-      const res = await fetch(`${baseUrl}/api/tags`, { method: 'GET' });
+      const { movedKeys } = await window.electronAPI!.aiMigrateLegacy!(JSON.parse(raw));
+      localStorage.removeItem(LEGACY_KEY);
+      return movedKeys;
+    } catch {
+      return []; // keep the old copy; try again next launch
+    }
+  }
+
+  static async getConfig(): Promise<AIConfig | null> {
+    return hasGateway() ? window.electronAPI!.aiGetConfig!() : null;
+  }
+
+  static getBrowserOllama(): { url: string; model: string } {
+    try {
+      const v = JSON.parse(localStorage.getItem(BROWSER_OLLAMA_KEY) || '{}');
+      return { url: typeof v.url === 'string' ? v.url : 'http://localhost:11434', model: typeof v.model === 'string' ? v.model : '' };
+    } catch {
+      return { url: 'http://localhost:11434', model: '' };
+    }
+  }
+
+  static setBrowserOllama(v: { url: string; model: string }): void {
+    localStorage.setItem(BROWSER_OLLAMA_KEY, JSON.stringify(v));
+  }
+
+  /** Browser build: is Ollama running, and which models can answer prompts? */
+  static async checkOllama(baseUrl = 'http://localhost:11434'): Promise<{ ok: boolean; models: string[] }> {
+    try {
+      const res = await fetch(`${baseUrl}/api/tags`);
       if (!res.ok) return { ok: false, models: [] };
       const data = await res.json();
-      const models = (data.models || []).map((m: any) => m.name);
-      return { ok: true, models };
+      return {
+        ok: true,
+        models: (data.models || [])
+          .filter((m: any) => !Array.isArray(m.capabilities) || m.capabilities.includes('completion'))
+          .map((m: any) => m.name),
+      };
     } catch {
       return { ok: false, models: [] };
     }
   }
 
-  /**
-   * Execute general prompt across selected provider
-   */
-  static async prompt(systemPrompt: string, userPrompt: string, config?: AIConfig): Promise<string> {
-    const activeConfig = config || this.getConfig();
-
-    if (activeConfig.provider === 'ollama') {
-      return this.callOllama(activeConfig, systemPrompt, userPrompt);
-    } else if (activeConfig.provider === 'gemini') {
-      return this.callGemini(activeConfig, systemPrompt, userPrompt);
-    } else {
-      return this.callOpenAI(activeConfig, systemPrompt, userPrompt);
+  /** Runs a prompt for a task (the task sets how hard Claude thinks). */
+  static async complete(task: AITask, systemPrompt: string, userPrompt: string): Promise<CompletionResult & { provider: AIProvider }> {
+    if (hasGateway()) {
+      try {
+        return await window.electronAPI!.aiPrompt!({ task, system: systemPrompt, user: userPrompt });
+      } catch (e: any) {
+        // Electron wraps main-process errors ("Error invoking remote method 'ai:prompt': Error: …"): show the sentence only.
+        throw new Error(String(e?.message || e).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, ''));
+      }
     }
-  }
-
-  private static async callOllama(config: AIConfig, systemPrompt: string, userPrompt: string): Promise<string> {
-    const res = await fetch(`${config.ollamaUrl}/api/generate`, {
+    const { url, model } = this.getBrowserOllama();
+    if (!model) throw new Error('In the browser, AI works only with a local Ollama: pick a model in AI Settings. Claude, Gemini and OpenAI need the desktop app.');
+    const res = await fetch(`${url}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: config.ollamaModel || 'llama3',
-        system: systemPrompt,
-        prompt: userPrompt,
+        model,
         stream: false,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Ollama error (${res.status}): Make sure Ollama is running locally at ${config.ollamaUrl}`);
-    }
-
-    const data = await res.json();
-    return data.response || '';
-  }
-
-  private static async callGemini(config: AIConfig, systemPrompt: string, userPrompt: string): Promise<string> {
-    if (!config.geminiApiKey) {
-      throw new Error('Gemini API Key is missing. Please add it in AI Settings.');
-    }
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel || 'gemini-1.5-flash'}:generateContent?key=${config.geminiApiKey}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `${systemPrompt}\n\nTask: ${userPrompt}` }],
-          },
-        ],
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(`Gemini error: ${err.error?.message || res.statusText}`);
-    }
-
-    const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  }
-
-  private static async callOpenAI(config: AIConfig, systemPrompt: string, userPrompt: string): Promise<string> {
-    if (!config.openaiApiKey) {
-      throw new Error('OpenAI API Key is missing. Please add it in AI Settings.');
-    }
-
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.openaiApiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.openaiModel || 'gpt-4o-mini',
+        options: { num_ctx: 16384 },
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
       }),
+    }).catch(() => {
+      throw new Error(`Ollama is not running at ${url}.`);
     });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(`OpenAI error: ${err.error?.message || res.statusText}`);
-    }
-
+    if (!res.ok) throw new Error(`Ollama error ${res.status}`);
     const data = await res.json();
-    return data.choices?.[0]?.message?.content || '';
+    return { text: data?.message?.content || '', model, provider: 'ollama' };
   }
 
-  /**
-   * Summarize document content
-   */
-  static async summarize(
-    content: string,
-    mode: 'bullet' | 'executive' | 'actions' = 'executive',
-    config?: AIConfig
-  ): Promise<string> {
+  static async prompt(systemPrompt: string, userPrompt: string, task: AITask = 'chat'): Promise<string> {
+    return (await this.complete(task, systemPrompt, userPrompt)).text;
+  }
+
+  /** Summarize document content */
+  static async summarize(content: string, mode: 'bullet' | 'executive' | 'actions' = 'executive'): Promise<string> {
     const instructions = {
       bullet: 'Summarize the following document into 5-7 crisp, high-impact bullet points with bold keywords.',
       executive: 'Produce a 2-paragraph executive briefing summarizing the core goal, current progress, and key challenges.',
       actions: 'Extract all action items, decisions, and next steps as a markdown checklist (- [ ] task).',
     }[mode];
-
     const systemPrompt = 'You are an expert executive project assistant and technical summarizer. Output clean, well-formatted Markdown.';
-    return this.prompt(systemPrompt, `${instructions}\n\nDocument Content:\n${content.slice(0, 15000)}`, config);
+    return this.prompt(systemPrompt, `${instructions}\n\nDocument Content:\n${content.slice(0, 15000)}`, 'summarize');
   }
 
-  /**
-   * Automatically categorize content, recommend tags, and suggest document type
-   */
-  static async categorize(content: string, config?: AIConfig): Promise<CategorizationResult> {
-    const systemPrompt = `You are a taxonomy and metadata classifier for a Notion-like project and agent knowledge base.
+  /** Categorize content, recommend tags, and suggest a document type */
+  static async categorize(content: string): Promise<CategorizationResult> {
+    const systemPrompt = `You are a taxonomy and metadata classifier for a Markdown project and agent knowledge base.
 Analyze the markdown text and return a STRICT JSON object with no wrapping quotes or code fences.
 Format:
 {
@@ -184,13 +137,7 @@ Format:
   "statusRecommendation": "Backlog" | "In Progress" | "Active" | "Draft" | "Done",
   "summary": "1-2 sentence overview"
 }`;
-
-    const rawResponse = await this.prompt(
-      systemPrompt,
-      `Analyze this markdown and classify it:\n\n${content.slice(0, 8000)}`,
-      config
-    );
-
+    const rawResponse = await this.prompt(systemPrompt, `Analyze this markdown and classify it:\n\n${content.slice(0, 8000)}`, 'categorize');
     try {
       const clean = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(clean);
@@ -212,17 +159,10 @@ Format:
     }
   }
 
-  /**
-   * Interactive Agent Sandbox Runner
-   */
-  static async runAgentSandbox(
-    systemPrompt: string,
-    userQuery: string,
-    tools: string[] = [],
-    config?: AIConfig
-  ): Promise<string> {
+  /** Interactive agent sandbox runner */
+  static async runAgentSandbox(systemPrompt: string, userQuery: string, tools: string[] = []): Promise<string> {
     const toolContext = tools.length > 0 ? `\nYou have access to the following simulated tools: ${tools.join(', ')}.` : '';
     const fullSystem = `${systemPrompt}${toolContext}\nAlways act strictly according to your defined persona and return clear, actionable answers.`;
-    return this.prompt(fullSystem, userQuery, config);
+    return this.prompt(fullSystem, userQuery, 'agent');
   }
 }

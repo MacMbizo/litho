@@ -5,6 +5,8 @@ import type { FixRecipe } from './fixRecipes';
 import type { ProjectBasicsFacts } from './projectBasics';
 import type { BasicsAction, BasicsActionResult } from './basicsFixes';
 import { summaryToEntry, type ProjectSummaryPayload } from './projectSummary';
+import type { AIConfig, AIProvider, AITask, CompletionResult, ModelOption } from '../../electron/ai/types';
+import type { CloudProvider, KeyStatus } from '../../electron/ai/keyStore';
 import type { PortfolioProjectSummary } from '../types/docAudit';
 import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
@@ -55,6 +57,14 @@ declare global {
       basicsPlanGitignore?: (projectRoot: string, repoPath?: string) => Promise<{ exists: boolean; additions: string[] }>;
       basicsRead?: (roots: string[]) => Promise<Record<string, ProjectBasicsFacts>>;
       basicsOpenUrl?: (url: string) => Promise<boolean>;
+      aiGetConfig?: () => Promise<AIConfig>;
+      aiSetConfig?: (config: AIConfig) => Promise<AIConfig>;
+      aiKeyStatus?: () => Promise<KeyStatus>;
+      aiSetKey?: (provider: CloudProvider, key: string) => Promise<KeyStatus>;
+      aiClearKey?: (provider: CloudProvider) => Promise<KeyStatus>;
+      aiListModels?: (provider: AIProvider) => Promise<{ models: ModelOption[]; error?: string }>;
+      aiMigrateLegacy?: (legacy: unknown) => Promise<{ movedKeys: string[] }>;
+      aiPrompt?: (req: { task: AITask; system: string; user: string; provider?: AIProvider }) => Promise<CompletionResult & { provider: AIProvider }>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }
