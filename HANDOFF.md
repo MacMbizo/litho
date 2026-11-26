@@ -37,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (118) | `npm test` |
+| Unit tests (124) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -289,7 +289,16 @@ The owner's standard: every project has a README that says what it is, a git rep
 ## Next: AI foundation (project 2), then design suite (project 3)
 
 1. ~~Safe stack fixer~~: done, see above.
-2. **AI foundation.**
+2. **AI foundation.** Design: `docs/superpowers/specs/2026-11-26-ai-foundation-design.md`.
+   - **Slice 1, done 2026-11-26 (gateway):**
+     - **Code:** `electron/ai/`: `keyStore.ts`, `gateway.ts`, `claude.ts`, `otherProviders.ts` and `types.ts`.
+     - **Calls:** all model calls run in the main process (IPC `ai:*`).
+     - **Keys:** encrypted with `safeStorage` in `ai-keys.bin`. The renderer only sees `set` and `last4`. Legacy localStorage keys migrate on launch.
+     - **Claude:** through `@anthropic-ai/sdk` 1.14: adaptive thinking, effort per task, `fallbacks: "default"`, and `stop_reason` checked.
+     - **Other providers:** the Gemini key is in a header. Model lists are live. Ollama uses `num_ctx` 16k. Settings were rebuilt.
+     - **Verified:** 124 unit tests. E2E 13/13: legacy migration, an encrypted file on disk, a real local `llama3.2` answer through the gateway, a fake Claude key rejected with a plain message, key removal.
+     - **Not verified:** a real Claude, Gemini or OpenAI answer, since no real key was used.
+   - **Next: slice 2 (personas + prompt caching), then slice 3 (finder → condenser → thinker).**
    - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
    - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.
    - Move API keys out of localStorage into Electron `safeStorage`, and make calls from the main process. Today the Gemini key is in the URL and calls come from the renderer.
