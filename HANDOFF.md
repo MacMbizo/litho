@@ -19,7 +19,7 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
   - **DrivingSchool (not a git repo):**
     - 7 scripts (`create-test-users.js`, `delete-and-recreate-users.js`, `fix-admin-password.js`, `fix-auth-final.js`, `reset-passwords.js`, `test-auth.js`, `test-connection.js`) now read `SUPABASE_SERVICE_ROLE_KEY` from `.env` instead of a hardcoded key.
     - `.env.example` gained that variable's name, with no value.
-    - The originals are backed up in the session scratchpad (`…/scratchpad/ds-backup`). They still contain the key, so delete them once the owner is happy.
+    - The originals were backed up in an earlier session's scratchpad (`…/scratchpad/ds-backup`). They still contain the key. Offered to find and delete them on 2026-11-26; the owner hasn't answered yet.
     - `.env` also has `VITE_WHATSAPP_ACCESS_TOKEN` and `VITE_PAYNOW_INTEGRATION_KEY`. They're unused in `src` and absent from `dist`, but `VITE_` values get bundled into the site if they're ever used.
   - **Fix .gitignore, one commit each, `.gitignore` only** (aves and sightline pushed 2026-11-26; see "Other repos" above):
     - agent-skills (`antigravity-skills/`): `0f8870c`
@@ -30,8 +30,10 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
   - **Skipped on purpose:**
     - **wellness:** 41 staged files, including a staged `.gitignore`, so someone's work is in progress.
     - **F4:** tracks `.vercel/project.json` on purpose. DocAtlas now leaves tracked folders alone.
-- **E2E scripts:** `tests/e2e/` now holds `e2e-personas.cjs` (18 checks) and `e2e-pipeline.cjs` (13 checks), plus `scale-index.ts` (indexing timer). Run after `npm run build` with `PLAYWRIGHT_CORE=C:/Users/Mac/AppData/Local/npm-cache/_npx/9833c18b2d85bc59/node_modules/playwright-core node tests/e2e/<file>`. They use isolated `--user-data-dir` and throwaway Notes folders; screenshots go to `E2E_OUT` (default: the temp folder). The pipeline suite needs Ollama with `nomic-embed-text` and `llama3.2`. The older suites (`e2e-basics`, `e2e-fixes`, `e2e-queue`, `e2e-gitignore`, `e2e-ai`) were lost with an earlier scratchpad.
-- **Gotcha:** in this environment Git Bash heredocs collapse `\\` to `\`. Write code containing backslashes with the Write/Edit tools, never `cat <<EOF`. Repo files use CRLF, so scripted multi-line find-and-replace (`node -e`, Python) silently fails to match; use Edit.
+- **Owner's Litho was running** at the end of the 2026-11-26 session, started before the latest changes (`dist` is rebuilt). They were told to restart it to get the hidden toggle, OpenRouter and the rest; AI settings and personas are read per request, so those already apply.
+- **E2E scripts:** `tests/e2e/` holds `e2e-personas.cjs` (18 checks), `e2e-pipeline.cjs` (17 checks; providers, encrypted OpenRouter key, `qwen3.5:4b`), `e2e-bigproject.cjs` (6 checks; needs `BIG_PROJECT_DIR`, a copy of a 3,000+ doc project) and `scale-index.ts` (indexing timer). Run after `npm run build` with `PLAYWRIGHT_CORE=C:/Users/Mac/AppData/Local/npm-cache/_npx/9833c18b2d85bc59/node_modules/playwright-core node tests/e2e/<file>`. They use isolated `--user-data-dir` and throwaway Notes folders, never the owner's data; screenshots go to `E2E_OUT` (default: the temp folder). The pipeline suites need Ollama with `nomic-embed-text`, `qwen3.5:4b` and `llama3.2`. The older suites (`e2e-basics`, `e2e-fixes`, `e2e-queue`, `e2e-gitignore`, `e2e-ai`) were lost with an earlier scratchpad. Model benchmarks (`bench.ts`, `roles.cjs`) lived in the 2026-11-26 scratchpad only.
+- **Gotcha:** in this environment Git Bash heredocs collapse `\\` to `\` (it bit four times on 2026-11-26, including a path like `'C:\Prj\litho'`). Write anything containing backslashes with the Write/Edit tools, never `cat <<EOF` or `sed`. Repo files use CRLF, so scripted multi-line find-and-replace (`node -e`, Python) silently fails to match; use Edit.
+- **Memory:** the owner's PC has 31 GB RAM but often only 7–10 GB free with their apps open. Don't load models bigger than ~8 GB (gpt-oss:20b drove it critically low), and keep heavy background jobs to one at a time.
 
 ## Name and brand (2026-11-14)
 
