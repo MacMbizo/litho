@@ -27,8 +27,8 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
   - **Skipped on purpose:**
     - **wellness:** 41 staged files, including a staged `.gitignore`, so someone's work is in progress.
     - **F4:** tracks `.vercel/project.json` on purpose. DocAtlas now leaves tracked folders alone.
-- **E2E scripts:** they live only in the session scratchpad and aren't in the repo. They used playwright-core from the npx cache with `--user-data-dir`. The suites were `e2e-basics` (`C:\Prj`, read-only, hashes every `.git`), `e2e-fixes`, `e2e-queue`, `e2e-gitignore` and `e2e-ai`, all on throwaway fixtures. Worth adding to the repo as a `tests/e2e/` folder.
-- **Gotcha:** in this environment Git Bash heredocs collapse `\\` to `\`. Write code containing backslashes with the Write/Edit tools, never `cat <<EOF`.
+- **E2E scripts:** `tests/e2e/` now holds `e2e-personas.cjs` (18 checks) and `e2e-pipeline.cjs` (13 checks), plus `scale-index.ts` (indexing timer). Run after `npm run build` with `PLAYWRIGHT_CORE=C:/Users/Mac/AppData/Local/npm-cache/_npx/9833c18b2d85bc59/node_modules/playwright-core node tests/e2e/<file>`. They use isolated `--user-data-dir` and throwaway Notes folders; screenshots go to `E2E_OUT` (default: the temp folder). The pipeline suite needs Ollama with `nomic-embed-text` and `llama3.2`. The older suites (`e2e-basics`, `e2e-fixes`, `e2e-queue`, `e2e-gitignore`, `e2e-ai`) were lost with an earlier scratchpad.
+- **Gotcha:** in this environment Git Bash heredocs collapse `\\` to `\`. Write code containing backslashes with the Write/Edit tools, never `cat <<EOF`. Repo files use CRLF, so scripted multi-line find-and-replace (`node -e`, Python) silently fails to match; use Edit.
 
 ## Name and brand (2026-11-14)
 
