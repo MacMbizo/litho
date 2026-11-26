@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
   scanDirectory: (dirPath: string, opts?: { watch?: boolean }) => ipcRenderer.invoke('fs:scanDirectory', dirPath, opts),
   scanPortfolioRoot: (dirPath: string) => ipcRenderer.invoke('fs:scanPortfolioRoot', dirPath),
+  scanProjectSummary: (dirPath: string) => ipcRenderer.invoke('fs:scanProjectSummary', dirPath),
   readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   createFolder: (folderPath: string) => ipcRenderer.invoke('fs:createFolder', folderPath),

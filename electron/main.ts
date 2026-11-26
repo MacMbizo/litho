@@ -5,6 +5,7 @@ import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 import { FixController } from './fixRunner';
 import { readProjectBasics } from './projectBasics';
 import { BasicsController, ghStatus } from './basicsFixer';
+import { summarizeScan, type ProjectSummaryPayload } from '../src/services/projectSummary';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -387,18 +388,26 @@ ipcMain.handle('fs:scanDirectory', async (_, dirPath: string, opts?: { watch?: b
   }
 });
 
+// One portfolio project as a summary (used by "Rescan" on a card and after fixes): no file contents.
+ipcMain.handle('fs:scanProjectSummary', async (_, dirPath: string) => {
+  try {
+    rememberProjectRoot(dirPath);
+    const [{ files }, { configFiles, installedPackages }, basics] = await Promise.all([
+      scanDirectoryRecursive(dirPath, dirPath),
+      readStackConfigFiles(dirPath),
+      readProjectBasics(dirPath).catch(() => undefined),
+    ]);
+    return summarizeScan({ rootPath: dirPath, rootName: path.basename(dirPath), files, configFiles, installedPackages, basics });
+  } catch (err: any) {
+    throw new Error(`Failed to scan project: ${err.message}`);
+  }
+});
+
 ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
   try {
     const entries = await fs.promises.readdir(rootDir, { withFileTypes: true });
-    const projects: Array<{
-      rootPath: string;
-      rootName: string;
-      files: any[];
-      tree: any;
-      configFiles: Record<string, string>;
-      installedPackages: Record<string, { present: boolean; versions: Record<string, string> }>;
-      basics?: Awaited<ReturnType<typeof readProjectBasics>>;
-    }> = [];
+    // Summaries only (stack + audit, no file contents): the window gets what the cards need, not every file.
+    const projects: ProjectSummaryPayload[] = [];
 
     const candidateDirs = entries.filter(
       (entry) => entry.isDirectory() && !IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')
@@ -406,14 +415,14 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
 
     const scanned = await mapWithConcurrency(candidateDirs, 4, async (entry) => {
       const projDir = path.join(rootDir, entry.name);
-      const [{ files, tree }, { configFiles, installedPackages }, hasGit] = await Promise.all([
+      const [{ files }, { configFiles, installedPackages }, hasGit] = await Promise.all([
         scanDirectoryRecursive(projDir, projDir),
         readStackConfigFiles(projDir),
         pathExists(path.join(projDir, '.git')),
       ]);
       if (files.length === 0 && Object.keys(configFiles).length === 0 && !hasGit) return null;
       const basics = await readProjectBasics(projDir).catch(() => undefined);
-      return { rootPath: projDir, rootName: entry.name, files, tree, configFiles, installedPackages, basics };
+      return summarizeScan({ rootPath: projDir, rootName: entry.name, files, configFiles, installedPackages, basics });
     });
 
     for (const p of scanned) if (p) {

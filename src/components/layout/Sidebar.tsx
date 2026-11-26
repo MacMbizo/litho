@@ -37,6 +37,8 @@ import { DocAtlasMark } from '../brand/BrandMarks';
 
 /** Above this many files, tree folders start collapsed. */
 const LARGE_TREE_FILES = 200;
+/** Docs listed under each project in the Portfolio tab before "+N more". */
+const PORTFOLIO_FILES_SHOWN = 60;
 
 interface SidebarProps {
   files: MarkdownFile[];
@@ -382,7 +384,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span className="truncate">{proj.name}</span>
                   </span>
                   <span className="text-[10px] font-mono text-neutral-400 shrink-0">
-                    {entry.auditReport.grade} • {proj.files.length}
+                    {entry.auditReport.grade} • {entry.auditReport.inventory.length}
                   </span>
                 </button>
               );
@@ -726,7 +728,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[10px] text-neutral-500 font-mono">
-                      {proj.files.length}
+                      {entry.auditReport.inventory.length}
                     </span>
                     <span
                       className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${gradeClass}`}
@@ -736,14 +738,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 </div>
 
-                {isExpanded && proj.files.length > 0 && (
+                {isExpanded && entry.auditReport.inventory.length > 0 && (
                   <div className="pl-5 pr-1 py-0.5 space-y-0.5 border-l border-[#2c2c30] ml-3 my-0.5">
-                    {proj.files.map((f) => {
-                      const isSelectedFile = isCurrentProject && activeFileId === f.id;
+                    {entry.auditReport.inventory.slice(0, PORTFOLIO_FILES_SHOWN).map((f) => {
+                      const isSelectedFile = isCurrentProject && activeFileId === f.fileId;
                       return (
                         <div
-                          key={f.id}
-                          onClick={() => onSelectPortfolioProject?.(proj, f.id)}
+                          key={f.fileId}
+                          onClick={() => onSelectPortfolioProject?.(proj, f.fileId)}
                           className={`flex items-center justify-between py-1 px-2 rounded text-[11px] cursor-pointer transition ${
                             isSelectedFile
                               ? 'bg-[#2f2f2f] text-white font-medium'
@@ -752,12 +754,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           title={f.path}
                         >
                           <div className="flex items-center gap-1.5 truncate">
-                            {getDocIcon(f.frontmatter?.type)}
+                            {getDocIcon(undefined)}
                             <span className="truncate">{f.path}</span>
                           </div>
                         </div>
                       );
                     })}
+                    {entry.auditReport.inventory.length > PORTFOLIO_FILES_SHOWN && (
+                      <div
+                        onClick={() => onSelectPortfolioProject?.(proj)}
+                        className="py-1 px-2 rounded text-[11px] text-indigo-300 hover:text-indigo-200 hover:bg-[#262626] cursor-pointer"
+                      >
+                        +{entry.auditReport.inventory.length - PORTFOLIO_FILES_SHOWN} more: open the project
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

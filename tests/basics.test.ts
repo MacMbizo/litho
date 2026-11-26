@@ -20,6 +20,7 @@ import {
   type RepoFacts,
 } from '../src/services/projectBasics.ts';
 import { findNestedRepos, readProjectBasics } from '../electron/projectBasics.ts';
+import { summarizeScan, summaryToEntry } from '../src/services/projectSummary.ts';
 
 // --- README summary ---------------------------------------------------------
 
@@ -211,6 +212,27 @@ test('describeProject prefers the README over the manifest', () => {
   const d = describeProject(facts({ manifestDescriptions: [{ source: 'package.json', text: 'Manifest text here' }] }));
   assert.strictEqual(d?.source, 'README.md');
   assert.strictEqual(assessProjectBasics(undefined).level, 'unknown');
+});
+
+// --- portfolio summaries (main process) -----------------------------------------
+
+test('summarizeScan audits a project and the entry carries no file contents', () => {
+  const s = summarizeScan({
+    rootPath: 'C:\\Prj\\demo',
+    rootName: 'demo',
+    files: [
+      { path: 'README.md', fullPath: 'C:\\Prj\\demo\\README.md', name: 'README.md', content: '# Demo\n\nA demo project for summaries.\n' },
+      { path: 'docs/a.md', fullPath: 'C:\\Prj\\demo\\docs\\a.md', name: 'a.md', content: '# A\n\nSee [missing](nope.md).' },
+    ],
+    configFiles: { 'package.json': '{"name":"demo","dependencies":{"react":"^19.0.0"}}' },
+  });
+  assert.strictEqual(s.auditReport.inventory.length, 2);
+  assert.ok(s.auditReport.stackProfile.frameworks.includes('React'));
+  assert.ok(s.auditReport.inventory.some((i) => i.brokenLinks.length > 0));
+  assert.ok(!JSON.stringify(s).includes('A demo project for summaries'), 'no file contents cross IPC');
+  const e = summaryToEntry(s, '2026-11-26T00:00:00Z');
+  assert.strictEqual(e.fromSnapshot, true);
+  assert.deepStrictEqual(e.workspace.files, []);
 });
 
 // --- real folders and git ---------------------------------------------------

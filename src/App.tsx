@@ -256,13 +256,9 @@ const AppContent: React.FC = () => {
   }, []);
 
   const applyPortfolioScan = useCallback(
-    (rootPath: string, projects: ProjectWorkspace[]) => {
-      const scannedAt = new Date().toISOString();
-      const summaries: PortfolioProjectSummary[] = projects.map((proj) => ({
-        workspace: proj,
-        auditReport: auditProjectDocumentation(proj, inspectProjectStack(proj)),
-        scannedAt,
-      }));
+    // Summaries arrive already audited by the main process (no file contents), so the window does no heavy work.
+    (rootPath: string, summaries: PortfolioProjectSummary[]) => {
+      const scannedAt = summaries[0]?.scannedAt || new Date().toISOString();
       const norm = (p: string | null) => (p || '').replace(/[\\/]+$/, '').toLowerCase();
       setPortfolioRoots((prev) => (prev.some((r) => norm(r) === norm(rootPath)) ? prev : [...prev, rootPath]));
       setPortfolioProjects((prev) =>
@@ -845,13 +841,7 @@ const AppContent: React.FC = () => {
   const rescanPortfolioEntry = async (rootPath: string) => {
     setRescanningProjectRoot(rootPath);
     try {
-      const fresh = await ProjectScannerService.scanPath(rootPath, { watch: false });
-      if (!fresh) return;
-      const summary: PortfolioProjectSummary = {
-        workspace: fresh,
-        auditReport: auditProjectDocumentation(fresh, inspectProjectStack(fresh)),
-        scannedAt: new Date().toISOString(),
-      };
+      const summary = await ProjectScannerService.scanProjectSummary(rootPath);
       setPortfolioProjects((prev) => prev.map((e) => (e.workspace.rootPath === rootPath ? summary : e)));
       await enrichWithRegistry([summary], true);
     } catch (err: any) {

@@ -4,6 +4,8 @@ import { archivePathFor, rewriteRelativeLinksForMove } from './docRemediation';
 import type { FixRecipe } from './fixRecipes';
 import type { ProjectBasicsFacts } from './projectBasics';
 import type { BasicsAction, BasicsActionResult } from './basicsFixes';
+import { summaryToEntry, type ProjectSummaryPayload } from './projectSummary';
+import type { PortfolioProjectSummary } from '../types/docAudit';
 import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
 declare global {
@@ -19,18 +21,8 @@ declare global {
         installedPackages?: ProjectWorkspace['installedPackages'];
         basics?: ProjectBasicsFacts;
       }>;
-      scanPortfolioRoot: (dirPath: string) => Promise<{
-        rootPath: string;
-        projects: Array<{
-          rootPath: string;
-          rootName: string;
-          files: Array<{ path: string; fullPath: string; name: string; content: string; lastModifiedMs?: number }>;
-          tree: any;
-          configFiles?: Record<string, string>;
-          installedPackages?: ProjectWorkspace['installedPackages'];
-          basics?: ProjectBasicsFacts;
-        }>;
-      }>;
+      scanPortfolioRoot: (dirPath: string) => Promise<{ rootPath: string; projects: ProjectSummaryPayload[] }>;
+      scanProjectSummary?: (dirPath: string) => Promise<ProjectSummaryPayload>;
       readFile: (filePath: string) => Promise<string>;
       writeFile: (filePath: string, content: string) => Promise<boolean>;
       createFolder: (folderPath: string) => Promise<boolean>;
@@ -457,7 +449,7 @@ export class ProjectScannerService {
   /**
    * Pick a root directory containing multiple projects and scan all of them
    */
-  static async openAndScanPortfolioRoot(): Promise<{ rootPath: string; projects: ProjectWorkspace[] } | null> {
+  static async openAndScanPortfolioRoot(): Promise<{ rootPath: string; projects: PortfolioProjectSummary[] } | null> {
     if (this.isElectron()) {
       const dirPath = await window.electronAPI!.openDirectory();
       if (!dirPath) return null;
@@ -466,7 +458,8 @@ export class ProjectScannerService {
     return null;
   }
 
-  static async scanPortfolioRoot(rootDirPath: string): Promise<{ rootPath: string; projects: ProjectWorkspace[] }> {
+  /** Every project under a root as a portfolio summary; audits run in the main process, no file contents. */
+  static async scanPortfolioRoot(rootDirPath: string): Promise<{ rootPath: string; projects: PortfolioProjectSummary[] }> {
     if (!this.isElectron()) {
       throw new Error('Multi-project root scanning requires the desktop Electron app.');
     }
@@ -474,35 +467,13 @@ export class ProjectScannerService {
       throw new Error('Please restart the Electron app (close window and run npm start) to enable Portfolio Scanning.');
     }
     const raw = await window.electronAPI.scanPortfolioRoot(rootDirPath);
-    const projects: ProjectWorkspace[] = raw.projects.map((p) => {
-      const parsedFiles: MarkdownFile[] = p.files.map((f) => {
-        const parsed = MarkdownService.parse(f.content, f.path);
-        return {
-          id: f.path,
-          path: f.path,
-          fullPath: f.fullPath,
-          name: f.name,
-          content: f.content,
-          frontmatter: parsed.frontmatter,
-          body: parsed.body,
-          wordCount: parsed.wordCount,
-          tasks: parsed.tasks,
-          lastModifiedMs: f.lastModifiedMs,
-          isDirty: false,
-        };
-      });
-      const enrichedTree = this.enrichTreeWithMetadata(p.tree, parsedFiles);
-      return {
-        name: p.rootName,
-        rootPath: p.rootPath,
-        isLocalFolder: true,
-        tree: enrichedTree,
-        files: parsedFiles,
-        configFiles: p.configFiles || {},
-        installedPackages: p.installedPackages,
-        basics: p.basics,
-      };
-    });
-    return { rootPath: raw.rootPath, projects };
+    const scannedAt = new Date().toISOString();
+    return { rootPath: raw.rootPath, projects: raw.projects.map((p) => summaryToEntry(p, scannedAt)) };
+  }
+
+  /** One project as a portfolio summary (no file contents), for card rescans. */
+  static async scanProjectSummary(dirPath: string): Promise<PortfolioProjectSummary> {
+    if (typeof window.electronAPI?.scanProjectSummary !== 'function') throw new Error('Restart the app to rescan projects.');
+    return summaryToEntry(await window.electronAPI.scanProjectSummary(dirPath), new Date().toISOString());
   }
 }
