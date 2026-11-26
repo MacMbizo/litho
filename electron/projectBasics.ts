@@ -179,7 +179,19 @@ export async function readProjectBasics(projectRoot: string): Promise<ProjectBas
       gitignoreDir = rel;
       try {
         const entries = (await fs.promises.readdir(path.join(projectRoot, rel), { withFileTypes: true })).map((d) => ({ name: d.name, isDir: d.isDirectory() }));
-        gitignoreGaps = ignoreGaps(await readHead(file, 64 * 1024), entries);
+        const gaps = ignoreGaps(await readHead(file, 64 * 1024), entries);
+        // A folder the repo already tracks (e.g. a committed .vercel/project.json) is a choice, not a gap.
+        const dir = path.join(projectRoot, rel);
+        const isRepo = repos.some((r) => r.path === rel && !r.error);
+        const keep: string[] = [];
+        for (const g of gaps) {
+          if (isRepo && g.endsWith('/')) {
+            const tracked = await gitReadOnly(dir, ['ls-files', '--', g.slice(0, -1)]).catch(() => '');
+            if (tracked.trim()) continue;
+          }
+          keep.push(g);
+        }
+        gitignoreGaps = keep;
       } catch {
         // unreadable
       }

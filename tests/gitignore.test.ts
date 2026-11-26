@@ -167,6 +167,29 @@ test('Start git on a DrivingSchool-like folder: fixes .gitignore itself, then as
   }
 });
 
+test('a build folder the repo already tracks is not a gap and is never added', async () => {
+  const dir = tmp();
+  const saved = { ...process.env };
+  Object.assign(process.env, ID);
+  try {
+    fs.writeFileSync(path.join(dir, '.gitignore'), '.env\nnode_modules\n');
+    fs.mkdirSync(path.join(dir, '.vercel'));
+    fs.writeFileSync(path.join(dir, '.vercel', 'project.json'), '{"projectId":"p"}');
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'init');
+    const facts = await readProjectBasics(dir);
+    assert.deepStrictEqual(facts.gitignoreGaps, []);
+    const r = await new BasicsController(known([dir])).run(dir, { kind: 'update-gitignore', repoPath: '' });
+    assert.ok(r.ok);
+    assert.ok(!fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8').includes('.vercel/'));
+    assert.strictEqual(git(dir, 'ls-files', '-ci', '--exclude-standard'), '', 'no tracked file became ignored');
+  } finally {
+    process.env = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('existing repo with a committed .env: basics flags it; Fix .gitignore and Stop tracking fix it', async () => {
   const dir = tmp();
   const saved = { ...process.env };

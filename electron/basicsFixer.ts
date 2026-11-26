@@ -215,7 +215,16 @@ async function applyGitignore(dir: string, leaveOut: string[] = []): Promise<{ c
   const entries = await topEntries(dir);
   const created = !(await exists(file));
   const before = created ? gitignoreFor(await detectStack(dir)) : await fs.promises.readFile(file, 'utf-8');
-  const lines = missingIgnoreLines(before, entries);
+  const lines: string[] = [];
+  for (const l of missingIgnoreLines(before, entries)) {
+    // Never ignore a folder the repo already tracks files in: that's the owner's choice, and the rule would
+    // silently stop new files there from being added.
+    if (l.endsWith('/') && (await exists(path.join(dir, '.git')))) {
+      const tracked = await git(dir, ['ls-files', '--', l.slice(0, -1)]).catch(() => '');
+      if (tracked.trim()) continue;
+    }
+    lines.push(l);
+  }
   for (const rel of leaveOut) {
     const probe = before + '\n' + lines.join('\n');
     if (!isIgnored(probe, rel)) lines.push(ignoreLineFor(rel));
