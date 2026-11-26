@@ -75,6 +75,7 @@ declare global {
       aiListPersonas?: () => Promise<{ folder: string | null; personas: PersonaInfo[] }>;
       aiCreatePersona?: (name: string) => Promise<{ id: string; path: string }>;
       aiOpenPersonasFolder?: () => Promise<boolean>;
+      aiAddStarterPersonas?: () => Promise<string[]>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }

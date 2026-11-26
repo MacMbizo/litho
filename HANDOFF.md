@@ -65,7 +65,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (130) | `npm test` |
+| Unit tests (132) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -333,9 +333,11 @@ The owner's standard: every project has a README that says what it is, a git rep
      - **Claude:** `claudeSystem` sends the persona as the first system block with `cache_control: ephemeral` (5-minute TTL), then the task's instructions; docs and the question stay in the user message. The cache is per model and effort, so each task keeps its own copy. `usage.cacheWrite` was added.
      - **Others:** Gemini, OpenAI and Ollama get the persona joined to the front of the system prompt (`systemWithPersona`); OpenAI and Gemini cached-token counts are read. Ollama's `num_ctx` is sized to the prompt (chars/3 + 4k, in 4k steps, 16k–128k).
      - **Shown:** the run line (`describeRun`) under summaries and project-chat answers: "Persona: X · N tokens from cache · model".
-     - **Verified:** 130 unit tests. The SDK's real request body, captured against a local stub server: persona block with `cache_control`, then the task block, plus adaptive thinking, effort and fallbacks. Electron e2e 14/14 (isolated userData and Notes folder): empty state, create and open, list with sizes, choice saved, a real `llama3.2` summary that followed a pirate persona, missing persona shown and a plain error, no console errors. Script: `scratchpad/e2e/e2e-personas.cjs` (not in the repo).
-     - **Not verified:** a real Claude cache hit (`cache_read_input_tokens` > 0) needs the owner's key: pick a persona for Project chat and ask twice within 5 minutes; the second answer should say "N tokens from cache". Light theme.
-     - **Ideas not built:** a 1-hour TTL option if gaps between questions are usually 5–60 min; ship a few starter personas.
+     - **Starter personas** (`electron/ai/starterPersonas.ts`): Software architect, Technical editor, Product strategist, about 600 words each, deliberately above Claude's 512-token cache minimum (a unit test enforces more than 800 estimated tokens). "Add 3 starter personas" in Settings copies them with `wx` (IPC `ai:addStarterPersonas`) and disappears once all are present.
+     - **Cache lifetime:** "Keep personas cached for an hour (Claude)" sets `AIConfig.cacheTtl` to `'1h'` (default `'5m'`). The 1-hour write costs 2x instead of 1.25x, so it only pays off when gaps between questions are 5–60 minutes.
+     - **Too short to cache:** the persona picker marks personas under about 600 estimated tokens "no cache", since Claude silently skips caching below 512.
+     - **Verified:** 132 unit tests. The SDK's real request body, captured against a local stub server: persona block with `cache_control` (and `ttl: "1h"` when chosen), then the task block, plus adaptive thinking, effort and fallbacks. Electron e2e 18/18 (isolated userData and Notes folder): empty state, starters added, create and open, list with sizes, choices and 1h saved, a real `llama3.2` summary that followed a pirate persona, missing persona shown and a plain error, no console errors. Script: `scratchpad/e2e/e2e-personas.cjs` (not in the repo).
+     - **Not verified:** a real Claude cache hit (`cache_read_input_tokens` > 0) needs the owner's key: pick a persona for Project chat (e.g. Software architect) and ask twice within 5 minutes; the second answer should say "N tokens from cache". Light theme.
    - **Next: slice 3 (finder → condenser → thinker).**
    - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
    - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.

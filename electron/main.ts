@@ -200,6 +200,7 @@ ipcMain.handle('ai:createPersona', async (_, name: unknown) => {
   const id = await aiGateway.createPersona(name);
   return { id, path: path.join((await aiGateway.personasFolder())!, id) };
 });
+ipcMain.handle('ai:addStarterPersonas', () => aiGateway.addStarterPersonas());
 // Opens the folder itself in File Explorer (created first). Only ever this one folder.
 ipcMain.handle('ai:openPersonasFolder', async () => {
   const dir = await aiGateway.personasFolder();

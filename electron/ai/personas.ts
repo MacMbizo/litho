@@ -9,6 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
+import { STARTER_PERSONAS } from './starterPersonas';
 
 export const PERSONAS_FOLDER_NAME = 'Personas';
 /** About 100k tokens: well past the 10–20k words a persona is meant to be, and far inside every context window. */
@@ -136,6 +137,21 @@ export async function createPersona(dir: string, name: string): Promise<string> 
     }
   }
   throw new Error('Too many personas with that name.');
+}
+
+/** Copies the starter personas in, skipping any name already there. Returns the ids actually added. */
+export async function addStarterPersonas(dir: string): Promise<string[]> {
+  await fs.promises.mkdir(dir, { recursive: true });
+  const added: string[] = [];
+  for (const p of STARTER_PERSONAS) {
+    try {
+      await fs.promises.writeFile(path.join(dir, p.id), p.text, { encoding: 'utf-8', flag: 'wx' });
+      added.push(p.id);
+    } catch (e: any) {
+      if (e?.code !== 'EEXIST') throw e;
+    }
+  }
+  return added;
 }
 
 /**

@@ -9,7 +9,7 @@ import type { KeyStore } from './keyStore';
 import { isCloudProvider } from './keyStore';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_FALLBACK_MODELS, claudeComplete, claudeModels } from './claude';
 import { geminiComplete, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels } from './otherProviders';
-import { createPersona, isPersonaId, listPersonas, readPersona, type PersonaInfo } from './personas';
+import { addStarterPersonas, createPersona, isPersonaId, listPersonas, readPersona, type PersonaInfo } from './personas';
 import { AI_TASKS, TASK_EFFORT, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
 
 export const DEFAULT_AI_CONFIG: AIConfig = {
@@ -17,6 +17,7 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   models: { claude: CLAUDE_DEFAULT_MODEL, gemini: '', openai: '', ollama: '' },
   ollamaUrl: 'http://localhost:11434',
   personas: {},
+  cacheTtl: '5m',
 };
 
 const PROVIDERS: AIProvider[] = ['claude', 'gemini', 'openai', 'ollama'];
@@ -38,6 +39,7 @@ export function normalizeConfig(raw: any): AIConfig {
     models,
     ollamaUrl: typeof c.ollamaUrl === 'string' && /^https?:\/\//.test(c.ollamaUrl) ? c.ollamaUrl.trim() : DEFAULT_AI_CONFIG.ollamaUrl,
     personas,
+    cacheTtl: c.cacheTtl === '1h' ? '1h' : '5m',
   };
 }
 
@@ -78,7 +80,7 @@ export class AIGateway {
     try {
       return normalizeConfig(JSON.parse(await fs.promises.readFile(this.configFile, 'utf-8')));
     } catch {
-      return { ...DEFAULT_AI_CONFIG, models: { ...DEFAULT_AI_CONFIG.models }, personas: {} };
+      return { ...DEFAULT_AI_CONFIG, models: { ...DEFAULT_AI_CONFIG.models }, personas: {}, cacheTtl: '5m' };
     }
   }
 
@@ -95,6 +97,12 @@ export class AIGateway {
     const folder = await this.personasDir();
     if (!folder) throw new Error('There is no Personas folder.');
     return createPersona(folder, name);
+  }
+
+  async addStarterPersonas(): Promise<string[]> {
+    const folder = await this.personasDir();
+    if (!folder) throw new Error('There is no Personas folder.');
+    return addStarterPersonas(folder);
   }
 
   async setConfig(raw: unknown): Promise<AIConfig> {
@@ -174,6 +182,7 @@ export class AIGateway {
     }
     const result = await this.providers.complete(provider, key, config.ollamaUrl, {
       persona: persona?.text,
+      cacheTtl: config.cacheTtl,
       system,
       user,
       model: config.models[provider],

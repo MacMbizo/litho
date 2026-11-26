@@ -34,9 +34,11 @@ export function claudeErrorMessage(e: unknown): string {
  * documents and question stay in the user message after it. Nothing volatile may go before the breakpoint.
  * The cache is per model and effort, so each task (fixed effort) keeps its own warm copy.
  */
-export function claudeSystem(req: Pick<CompletionRequest, 'persona' | 'system'>): string | Anthropic.Beta.BetaTextBlockParam[] {
+export function claudeSystem(req: Pick<CompletionRequest, 'persona' | 'system' | 'cacheTtl'>): string | Anthropic.Beta.BetaTextBlockParam[] {
   if (!req.persona) return req.system;
-  const blocks: Anthropic.Beta.BetaTextBlockParam[] = [{ type: 'text', text: req.persona, cache_control: { type: 'ephemeral' } }];
+  // 5 minutes is the API default, so it's left implicit; 1 hour must be asked for.
+  const cache_control: Anthropic.Beta.BetaCacheControlEphemeral = req.cacheTtl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
+  const blocks: Anthropic.Beta.BetaTextBlockParam[] = [{ type: 'text', text: req.persona, cache_control }];
   // The API refuses empty text blocks.
   if (req.system.trim()) blocks.push({ type: 'text', text: req.system });
   return blocks;

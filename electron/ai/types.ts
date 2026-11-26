@@ -8,6 +8,8 @@ export interface CompletionRequest {
    * the front of the system prompt, which keeps it a stable prefix for their own automatic caching.
    */
   persona?: string;
+  /** How long Claude keeps the cached persona: 5 minutes (default) or 1 hour. */
+  cacheTtl?: CacheTtl;
   system: string;
   user: string;
   model: string;
@@ -43,7 +45,14 @@ export interface AIConfig {
   ollamaUrl: string;
   /** Persona file (in the Personas folder) used for each task; absent = none. */
   personas: Partial<Record<AITask, string>>;
+  /**
+   * Claude persona cache lifetime. '5m' is cheapest when questions come in quick runs; '1h' costs more to
+   * write (2x instead of 1.25x) but survives 5–60 minute gaps between questions.
+   */
+  cacheTtl: CacheTtl;
 }
+
+export type CacheTtl = '5m' | '1h';
 
 /** Tasks the app runs; each maps to an effort level. */
 export type AITask = 'categorize' | 'summarize' | 'chat' | 'agent';

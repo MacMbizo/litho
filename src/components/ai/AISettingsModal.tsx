@@ -3,6 +3,7 @@ import { Settings, Check, X, RefreshCw, Cpu, Cloud, KeyRound, AlertCircle, Noteb
 import { AIService, type AIConfig, type AIProvider, type AITask, type PersonaInfo } from '../../services/aiService';
 import type { ModelOption } from '../../../electron/ai/types';
 import type { KeyStatus } from '../../../electron/ai/keyStore';
+import { STARTER_PERSONAS } from '../../../electron/ai/starterPersonas';
 
 /** Desktop only: where Ctrl+N notes are kept. Changes apply immediately (not on "Save"). */
 export interface NotesFolderSettings {
@@ -29,7 +30,8 @@ const PERSONA_TASKS: Array<{ task: AITask; label: string; hint: string }> = [
   { task: 'agent', label: 'Agent sandbox', hint: 'Added before the agent file' },
 ];
 
-const personaSize = (p: PersonaInfo) => `${p.words.toLocaleString('en-US')} words · ~${p.approxTokens.toLocaleString('en-US')} tokens`;
+// Claude caches nothing under 512 tokens; the estimate is rough, so warn with some margin.
+const personaSize = (p: PersonaInfo) => `${p.words.toLocaleString('en-US')} words${p.approxTokens < 600 ? ', no cache' : ''}`;
 
 const sameFolder = (a: string | null, b: string | null) =>
   Boolean(a && b) && a!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase() === b!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
@@ -67,6 +69,20 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
       setPersonaError(e?.message || String(e));
     }
   }, []);
+
+  const missingStarters = STARTER_PERSONAS.map((p) => p.id).filter(
+    (id) => !personas?.personas.some((x) => x.id.toLowerCase() === id.toLowerCase())
+  );
+
+  const addStarters = async () => {
+    setPersonaError(null);
+    try {
+      await window.electronAPI!.aiAddStarterPersonas!();
+      await loadPersonas();
+    } catch (e: any) {
+      setPersonaError(String(e?.message || e).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, ''));
+    }
+  };
 
   const createPersona = async () => {
     const name = (newPersonaName || '').trim();
@@ -388,7 +404,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
                 <div className="p-3.5 rounded-lg bg-[#181818] border border-[#2e2e2e] space-y-3">
                   <p className="text-[11px] text-neutral-500 leading-relaxed">
                     A persona is a Markdown brief that tells the AI who to be for a task. Long is fine: with Claude it's cached, so after the first answer it costs about a
-                    twentieth as much.
+                    twentieth as much. Under about 450 words it's too short to cache ("no cache").
                   </p>
                   {PERSONA_TASKS.map(({ task, label, hint }) => {
                     const chosen = config.personas[task] || '';
@@ -421,8 +437,38 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
                     );
                   })}
                   {personas && personas.personas.length === 0 && (
-                    <p className="text-[11px] text-neutral-500">No personas yet. Create one, or put .md files in the Personas folder.</p>
+                    <p className="text-[11px] text-neutral-500">No personas yet. Add the starters, create your own, or put .md files in the Personas folder.</p>
                   )}
+                  {missingStarters.length > 0 && personas && (
+                    <button
+                      type="button"
+                      onClick={addStarters}
+                      className="text-[11px] text-fuchsia-300 hover:text-fuchsia-200 flex items-center gap-1.5"
+                      title={missingStarters.map((id) => id.replace(/\.md$/i, '')).join(', ')}
+                      data-testid="add-starter-personas"
+                    >
+                      <FilePlus className="w-3.5 h-3.5" />
+                      {missingStarters.length === STARTER_PERSONAS.length
+                        ? `Add ${STARTER_PERSONAS.length} starter personas (${STARTER_PERSONAS.map((p) => p.id.replace(/\.md$/i, '')).join(', ')})`
+                        : `Add the missing starter persona${missingStarters.length > 1 ? 's' : ''}`}
+                    </button>
+                  )}
+                  <label className="flex items-start gap-2 text-[11px] text-neutral-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 accent-fuchsia-500"
+                      checked={config.cacheTtl === '1h'}
+                      onChange={(e) => setConfig({ ...config, cacheTtl: e.target.checked ? '1h' : '5m' })}
+                      aria-label="Keep personas cached for an hour"
+                    />
+                    <span>
+                      Keep personas cached for an hour <span className="text-neutral-500">(Claude)</span>
+                      <span className="block text-[10px] text-neutral-500 leading-relaxed">
+                        Off: cached for 5 minutes, cheapest when you ask several questions in a row. On: the first answer costs a bit more, but the persona stays cheap if you come back
+                        within the hour.
+                      </span>
+                    </span>
+                  </label>
                   {newPersonaName !== null ? (
                     <div className="flex items-center gap-2">
                       <input

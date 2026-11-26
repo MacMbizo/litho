@@ -8,7 +8,8 @@ import { AIGateway, DEFAULT_AI_CONFIG, normalizeConfig, type Providers } from '.
 import { checkOllamaUrl } from '../electron/ai/otherProviders.ts';
 import { claudeSystem } from '../electron/ai/claude.ts';
 import { systemWithPersona } from '../electron/ai/types.ts';
-import { PERSONA_MAX_CHARS, createPersona, isPersonaId, listPersonas, ollamaContextFor, parsePersona, readPersona } from '../electron/ai/personas.ts';
+import { STARTER_PERSONAS } from '../electron/ai/starterPersonas.ts';
+import { PERSONA_MAX_CHARS, addStarterPersonas, createPersona, isPersonaId, listPersonas, ollamaContextFor, parsePersona, readPersona } from '../electron/ai/personas.ts';
 
 /** Reversible stand-in for safeStorage: proves the file never holds the key in plain text. */
 const fakeCipher = (available = true): Cipher => ({
@@ -175,6 +176,49 @@ test('claudeSystem puts the persona first with a cache breakpoint, task instruct
   assert.strictEqual((claudeSystem({ persona: 'P', system: '  ' }) as any[]).length, 1, 'no empty text block');
   assert.strictEqual(systemWithPersona({ persona: 'P', system: 'task' }), 'P\n\n---\n\ntask');
   assert.strictEqual(systemWithPersona({ system: 'task' }), 'task');
+  assert.deepStrictEqual((claudeSystem({ persona: 'P', system: 't', cacheTtl: '1h' }) as any[])[0].cache_control, { type: 'ephemeral', ttl: '1h' });
+  assert.deepStrictEqual((claudeSystem({ persona: 'P', system: 't', cacheTtl: '5m' }) as any[])[0].cache_control, { type: 'ephemeral' });
+});
+
+test('cacheTtl defaults to 5m, keeps 1h, and reaches the provider', async () => {
+  assert.strictEqual(normalizeConfig({}).cacheTtl, '5m');
+  assert.strictEqual(normalizeConfig({ cacheTtl: '1h' }).cacheTtl, '1h');
+  assert.strictEqual(normalizeConfig({ cacheTtl: '24h' }).cacheTtl, '5m');
+  const dir = tmp();
+  try {
+    const log: any[] = [];
+    const gw = new AIGateway(path.join(dir, 'c.json'), new KeyStore(path.join(dir, 'k.bin'), fakeCipher()), {
+      complete: async (_p, _k, _u, req) => (log.push(req), { text: '', model: req.model }),
+      models: async () => [],
+    });
+    await gw.setConfig({ provider: 'ollama', models: { ollama: 'm' }, cacheTtl: '1h' });
+    await gw.prompt('chat', 's', 'u');
+    assert.strictEqual(log[0].cacheTtl, '1h');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('starter personas: cacheable size, parse cleanly, added once, never overwrite', async () => {
+  for (const s of STARTER_PERSONAS) {
+    const p = parsePersona(s.id, s.text);
+    assert.ok(isPersonaId(s.id), s.id);
+    assert.ok(p.description && p.name === s.id.replace(/\.md$/, ''), s.id);
+    assert.ok(p.approxTokens > 800, `${s.id} is safely above the 512-token cache minimum (${p.approxTokens})`);
+    assert.ok(!p.text.includes('name:'), 'frontmatter stripped');
+  }
+  const dir = tmp();
+  try {
+    const folder = path.join(dir, 'Personas');
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, 'Technical editor.md'), 'my own');
+    const added = await addStarterPersonas(folder);
+    assert.deepStrictEqual(added, ['Software architect.md', 'Product strategist.md']);
+    assert.strictEqual(fs.readFileSync(path.join(folder, 'Technical editor.md'), 'utf-8'), 'my own', 'existing file kept');
+    assert.deepStrictEqual(await addStarterPersonas(folder), [], 'second run adds nothing');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('ollamaContextFor fits the whole prompt, in 4k steps, between 16k and 128k', () => {
