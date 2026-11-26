@@ -6,10 +6,15 @@
 export type BasicsAction =
   | { kind: 'create-readme'; content: string }
   | { kind: 'add-description'; readmePath: string; expected: string; description: string }
-  | { kind: 'start-git' }
-  | { kind: 'publish-github'; repoPath: string; name: string; visibility: 'private' | 'public'; description?: string }
-  | { kind: 'push'; repoPath: string }
-  | { kind: 'add-licence'; repoPath: string; licence: LicenceId; holder: string; year: number };
+  /** ignore: extra paths to add to .gitignore first ("Leave out of git"); confirmed: name-only flags the person checked. */
+  | { kind: 'start-git'; ignore?: string[]; confirmed?: string[] }
+  | { kind: 'publish-github'; repoPath: string; name: string; visibility: 'private' | 'public'; description?: string; confirmed?: string[] }
+  | { kind: 'push'; repoPath: string; confirmed?: string[] }
+  | { kind: 'add-licence'; repoPath: string; licence: LicenceId; holder: string; year: number }
+  /** Append the missing safety lines to an existing .gitignore. */
+  | { kind: 'update-gitignore'; repoPath: string }
+  /** Stop tracking committed secret files: .gitignore + git rm --cached + one commit. History keeps them. */
+  | { kind: 'untrack-secrets'; repoPath: string; paths: string[] };
 
 /** Licences DocAtlas can add. AGPL-3.0 is the owner's default; Proprietary suits client work. */
 export const LICENCES = [
@@ -35,6 +40,8 @@ export function licenceText(id: LicenceId, template: string | null, holder: stri
 export interface ScanFinding {
   path: string;
   reason: string;
+  /** block: a key or env file, never let through. review: only the name is suspicious; the person decides. */
+  level: 'block' | 'review';
 }
 
 export interface BasicsActionResult {
@@ -65,6 +72,18 @@ export function validateAction(raw: unknown): BasicsAction {
     if (s.startsWith('/') || /^[a-z]:/i.test(s) || s.split('/').includes('..')) throw new Error(`Invalid ${name}`);
     return s.replace(/\/+$/, '');
   };
+  const relPaths = (v: unknown, name: string): string[] | undefined => {
+    if (v == null) return undefined;
+    if (!Array.isArray(v) || v.length > 500) throw new Error(`Invalid ${name}`);
+    const out = v.map((p) => relPath(p, name));
+    // A .gitignore line is a pattern: refuse anything that could reshape the file (newlines, negation, comments).
+    if (out.some((p) => !p || /[\r\n]/.test(p) || p.startsWith('!') || p.startsWith('#'))) throw new Error(`Invalid ${name}`);
+    return out;
+  };
+  const optConfirmed = () => {
+    const confirmed = relPaths(a.confirmed, 'checked files');
+    return confirmed?.length ? { confirmed } : {};
+  };
   switch (a.kind) {
     case 'create-readme':
       return { kind: 'create-readme', content: str(a.content, 200_000, 'README') };
@@ -75,17 +94,34 @@ export function validateAction(raw: unknown): BasicsAction {
       if (!/^readme(\.(md|markdown|mdx|txt))?$/i.test(readmePath.split('/').pop() || '')) throw new Error('Not a README');
       return { kind: 'add-description', readmePath, expected: str(a.expected, 2_000_000, 'README'), description };
     }
-    case 'start-git':
-      return { kind: 'start-git' };
+    case 'start-git': {
+      const ignore = relPaths(a.ignore, 'paths to leave out');
+      const confirmed = relPaths(a.confirmed, 'checked files');
+      return { kind: 'start-git', ...(ignore?.length ? { ignore } : {}), ...(confirmed?.length ? { confirmed } : {}) };
+    }
+    case 'update-gitignore':
+      return { kind: 'update-gitignore', repoPath: relPath(a.repoPath ?? '', 'repo path') };
+    case 'untrack-secrets': {
+      const paths = relPaths(a.paths, 'files') || [];
+      if (paths.length === 0) throw new Error('No files given');
+      return { kind: 'untrack-secrets', repoPath: relPath(a.repoPath ?? '', 'repo path'), paths };
+    }
     case 'publish-github': {
       const name = str(a.name, 100, 'repository name');
       if (!REPO_NAME_RE.test(name)) throw new Error('Repository names may use letters, numbers, ".", "-" and "_" only');
       if (a.visibility !== 'private' && a.visibility !== 'public') throw new Error('Invalid visibility');
       const description = a.description == null ? undefined : oneLine(str(a.description, 1000, 'description')).slice(0, 350);
-      return { kind: 'publish-github', repoPath: relPath(a.repoPath ?? '', 'repo path'), name, visibility: a.visibility, description: description || undefined };
+      return {
+        kind: 'publish-github',
+        repoPath: relPath(a.repoPath ?? '', 'repo path'),
+        name,
+        visibility: a.visibility,
+        description: description || undefined,
+        ...optConfirmed(),
+      };
     }
     case 'push':
-      return { kind: 'push', repoPath: relPath(a.repoPath ?? '', 'repo path') };
+      return { kind: 'push', repoPath: relPath(a.repoPath ?? '', 'repo path'), ...optConfirmed() };
     case 'add-licence': {
       const licence = LICENCES.find((l) => l.id === a.licence)?.id;
       if (!licence) throw new Error('Unknown licence');
@@ -195,6 +231,8 @@ const SAFE_ENV = /^\.env\.(example|sample|template|defaults?)$/i;
 export function riskyFileName(relPath: string): string | null {
   const base = relPath.split('/').pop() || relPath;
   if (SAFE_ENV.test(base)) return null;
+  // Android's debug keystore has a public, well-known password; React Native and Expo templates commit it.
+  if (/^debug\.keystore$/i.test(base)) return null;
   for (const [re, why] of RISKY_NAMES) if (re.test(base)) return why;
   return null;
 }
@@ -212,16 +250,165 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\bAccountKey=[A-Za-z0-9+/=]{40,}/, 'Azure storage key'],
 ];
 
+const PLACEHOLDER = /x{8,}|your[_-]|example|placeholder|<[^>]+>|\$\{/i;
+
+function base64UrlJson(part: string): any {
+  try {
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+    return JSON.parse(bin);
+  } catch {
+    return null;
+  }
+}
+
+/** Connection strings with an inline password, except throwaway local ones (localhost dev databases). */
+const DB_URL = /\b(postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?):\/\/([^:\s/@'"`]+):([^@\s'"`]{4,})@([^/\s:'"`?]+)/gi;
+
 /** The kind of secret a text file appears to contain, or null. Placeholder values are ignored. */
 export function secretInText(text: string): string | null {
   for (const [re, why] of SECRET_PATTERNS) {
-    const m = re.exec(text);
-    if (m && !/x{8,}|your[_-]|example|placeholder|<[^>]+>/i.test(m[0])) return why;
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+    for (const m of text.matchAll(g)) if (!PLACEHOLDER.test(m[0])) return why;
+  }
+  // Supabase keys are JWTs: "anon" keys are public by design, "service_role" bypasses all security.
+  for (const m of text.matchAll(/eyJ[A-Za-z0-9_-]{8,}\.(eyJ[A-Za-z0-9_-]{8,})\.[A-Za-z0-9_-]{8,}/g)) {
+    const role = base64UrlJson(m[1])?.role;
+    if (role === 'service_role' || role === 'supabase_admin') return 'Supabase service_role key (full database access)';
+  }
+  if (/\bsb_secret_[A-Za-z0-9_-]{20,}/.test(text)) return 'Supabase secret key';
+  for (const m of text.matchAll(DB_URL)) {
+    const host = m[4].toLowerCase();
+    if (['localhost', '127.0.0.1', '0.0.0.0', 'db', 'postgres', 'mysql', 'mongo', 'redis', 'host.docker.internal'].includes(host)) continue;
+    if (PLACEHOLDER.test(m[0]) || /^(password|pass|pwd|secret|changeme)$/i.test(m[3])) continue;
+    return 'database URL with a password';
   }
   return null;
+}
+
+/** File names that suggest credentials: not proof, so the person checks them (they can be test logins). */
+export function reviewFileName(relPath: string): string | null {
+  const base = relPath.split('/').pop() || relPath;
+  if (riskyFileName(relPath) || SAFE_ENV.test(base)) return null;
+  return /(credential|secret|passw(or)?d|api[-_]?keys?)/i.test(base) ? 'its name suggests credentials: check it before it goes into git' : null;
 }
 
 /** True when the first bytes look binary (a NUL byte). */
 export function looksBinary(head: Uint8Array): boolean {
   return head.subarray(0, 8000).includes(0);
+}
+
+// --- .gitignore: read it, and add only what's missing ------------------------------
+
+/** One .gitignore rule, compiled. */
+interface IgnoreRule {
+  negate: boolean;
+  dirOnly: boolean;
+  re: RegExp;
+}
+
+function compileRule(line: string): IgnoreRule | null {
+  let l = line.replace(/\s+$/, '');
+  if (!l || l.startsWith('#')) return null;
+  const negate = l.startsWith('!');
+  if (negate) l = l.slice(1);
+  const dirOnly = l.endsWith('/');
+  if (dirOnly) l = l.replace(/\/+$/, '');
+  // A slash at the start or in the middle anchors the pattern to the .gitignore's folder.
+  const anchored = l.includes('/');
+  l = l.replace(/^\//, '');
+  let src = '';
+  for (let i = 0; i < l.length; i++) {
+    const c = l[i];
+    if (c === '\\' && i + 1 < l.length) {
+      // An escaped character is literal ("\[", "\*", "\#", "\!").
+      src += l[++i].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+    } else if (c === '*') {
+      if (l[i + 1] === '*') {
+        src += l[i + 2] === '/' ? '(?:.*/)?' : '.*';
+        i += l[i + 2] === '/' ? 2 : 1;
+      } else src += '[^/]*';
+    } else if (c === '?') src += '[^/]';
+    else if (c === '[') {
+      const end = l.indexOf(']', i + 1);
+      if (end > i) {
+        src += '[' + l.slice(i + 1, end).replace(/^!/, '^').replace(/\\/g, '\\\\') + ']';
+        i = end;
+      } else src += '\\[';
+    } else src += c.replace(/[.+^${}()|\\]/g, '\\$&');
+  }
+  return { negate, dirOnly, re: new RegExp(anchored ? `^${src}$` : `^(?:.*/)?${src}$`) };
+}
+
+/**
+ * Whether a path (relative to the .gitignore's folder, "/"-separated) is ignored. Follows git's rules
+ * that matter here: last matching rule wins, "!" re-includes, "dir/" matches folders only, and anything
+ * inside an ignored folder is ignored (a "!" can't bring it back).
+ */
+export function isIgnored(gitignore: string, relPath: string, isDir = false): boolean {
+  const rules = gitignore.split(/\r?\n/).map(compileRule).filter((r): r is IgnoreRule => r !== null);
+  const parts = relPath.split('/').filter(Boolean);
+  for (let i = 1; i <= parts.length; i++) {
+    const sub = parts.slice(0, i).join('/');
+    const subIsDir = i < parts.length || isDir;
+    let ignored = false;
+    for (const r of rules) {
+      if (r.dirOnly && !subIsDir) continue;
+      if (r.re.test(sub)) ignored = !r.negate;
+    }
+    if (ignored && i < parts.length) return true; // a parent folder is ignored
+    if (i === parts.length) return ignored;
+  }
+  return false;
+}
+
+/** Folders that never belong in git when they exist at the top of a project. */
+const BUILD_DIRS = ['node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', '.next', '.expo', '.turbo', 'target', 'coverage', '.vercel'];
+
+/**
+ * Lines to append so .gitignore keeps secrets and build output out of git. Never removes a line;
+ * returns [] when nothing is missing. `entries` are the names at the top of the folder.
+ */
+export function missingIgnoreLines(gitignore: string, entries: Array<{ name: string; isDir: boolean }>): string[] {
+  const add: string[] = [];
+  const current = () => gitignore + '\n' + add.join('\n');
+  if (!isIgnored(current(), '.env')) add.push('.env');
+  if (!isIgnored(current(), '.env.local') || !isIgnored(current(), '.env.production')) add.push('.env.*');
+  // Example env files are meant to be shared: keep .env.example always, the others when they exist.
+  for (const keep of ['.env.example', '.env.sample', '.env.template']) {
+    const wanted = keep === '.env.example' || entries.some((e) => e.name === keep);
+    if (wanted && isIgnored(current(), keep)) add.push('!' + keep);
+  }
+  for (const [probe, line] of [['server.pem', '*.pem'], ['server.key', '*.key']] as const) {
+    if (!isIgnored(current(), probe)) add.push(line);
+  }
+  for (const e of entries) {
+    if (e.isDir && BUILD_DIRS.includes(e.name) && !isIgnored(current(), e.name, true)) add.push(`${e.name}/`);
+  }
+  return add;
+}
+
+/**
+ * The gaps worth a warning in an existing .gitignore: real risks only. A missing ".env" rule always counts
+ * (it's the file that leaks keys); ".env.*" only when such a file exists unignored (Next.js commits
+ * .env.production on purpose); build folders only when present. Key patterns and "!.env.example" are tidy-ups
+ * a fix adds, not warnings.
+ */
+export function ignoreGaps(gitignore: string, entries: Array<{ name: string; isDir: boolean }>): string[] {
+  const gaps: string[] = [];
+  if (!isIgnored(gitignore, '.env')) gaps.push('.env');
+  const loose = entries.filter((e) => !e.isDir && /^\.env\..+/i.test(e.name) && !SAFE_ENV.test(e.name) && !isIgnored(gitignore, e.name));
+  if (loose.length) gaps.push(...loose.map((e) => e.name));
+  for (const e of entries) {
+    if (e.isDir && BUILD_DIRS.includes(e.name) && !isIgnored(gitignore, e.name, true)) gaps.push(`${e.name}/`);
+  }
+  return gaps;
+}
+
+/** The text appended to an existing .gitignore (keeps its line endings and a trailing newline). */
+export function appendIgnoreLines(gitignore: string, lines: string[], heading = '# Added by DocAtlas: keep secrets and build output out of git'): string {
+  if (lines.length === 0) return gitignore;
+  const eol = gitignore.includes('\r\n') ? '\r\n' : '\n';
+  const base = gitignore === '' || gitignore.endsWith('\n') ? gitignore : gitignore + eol;
+  return base + (base.trim() ? eol : '') + [heading, ...lines].join(eol) + eol;
 }

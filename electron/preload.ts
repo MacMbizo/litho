@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   basicsRun: (projectRoot: string, action: unknown) => ipcRenderer.invoke('basics:run', projectRoot, action),
   basicsGhStatus: () => ipcRenderer.invoke('basics:ghStatus'),
   basicsGitUser: () => ipcRenderer.invoke('basics:gitUser'),
+  basicsPlanGitignore: (projectRoot: string, repoPath?: string) => ipcRenderer.invoke('basics:planGitignore', projectRoot, repoPath),
   basicsRead: (roots: string[]) => ipcRenderer.invoke('basics:read', roots),
   basicsOpenUrl: (url: string) => ipcRenderer.invoke('basics:openUrl', url),
   onFsChanged: (callback: (data: any) => void) => {

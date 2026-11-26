@@ -4,7 +4,15 @@ import type { BasicsActionResult } from '../../services/basicsFixes';
 import { LICENCES, draftReadme, suggestRepoName, type LicenceId } from '../../services/basicsFixes';
 import type { ProjectBasicsFacts, RepoFacts } from '../../services/projectBasics';
 
-export type BasicsSheetKind = 'create-readme' | 'add-description' | 'start-git' | 'publish-github' | 'push' | 'add-licence';
+export type BasicsSheetKind =
+  | 'create-readme'
+  | 'add-description'
+  | 'start-git'
+  | 'publish-github'
+  | 'push'
+  | 'add-licence'
+  | 'update-gitignore'
+  | 'untrack-secrets';
 
 export interface BasicsActionContext {
   projectRoot: string;
@@ -20,6 +28,10 @@ interface Props {
   ctx: BasicsActionContext;
   /** The repo the action targets (publish/push), '' = project root. */
   repo?: RepoFacts;
+  /** Folder for actions without a repo object (Fix .gitignore); defaults to repo?.path. */
+  repoPath?: string;
+  /** Files for Stop tracking secrets. */
+  paths?: string[];
   /** Prefill for the description fields (the manifest's, or the current About line). */
   suggestedDescription: string;
   onClose: () => void;
@@ -32,12 +44,20 @@ const TITLES: Record<BasicsSheetKind, string> = {
   'publish-github': 'Publish to GitHub',
   push: 'Push',
   'add-licence': 'Add a licence',
+  'update-gitignore': 'Fix .gitignore',
+  'untrack-secrets': 'Stop tracking secrets',
 };
 
 const joinPath = (root: string, rel: string) => (rel ? `${root.replace(/[\\/]+$/, '')}\\${rel.replace(/\//g, '\\')}` : root);
 
 /** Confirm → run → result, for one project-basics fix. Nothing runs until the person presses the button. */
-export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedDescription, onClose }) => {
+export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, repoPath: repoPathProp, paths, suggestedDescription, onClose }) => {
+  const repoPath = repoPathProp ?? repo?.path ?? '';
+  // Start git / Fix .gitignore: what would be added to .gitignore, shown before anything runs.
+  const [ignorePlan, setIgnorePlan] = useState<{ exists: boolean; additions: string[] } | null>(null);
+  // Decisions on flagged files: leave out of git (adds to .gitignore) or, for name-only flags, include.
+  const [leaveOut, setLeaveOut] = useState<Set<string>>(new Set());
+  const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BasicsActionResult | null>(null);
   const [description, setDescription] = useState(suggestedDescription);
@@ -83,6 +103,25 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
   }, [kind]);
 
   useEffect(() => {
+    if (kind !== 'start-git' && kind !== 'update-gitignore') return;
+    window.electronAPI?.basicsPlanGitignore?.(ctx.projectRoot, repoPath).then(setIgnorePlan).catch(() => setIgnorePlan(null));
+  }, [kind, ctx.projectRoot, repoPath]);
+
+  const toggleIn = (set: Set<string>, setter: (s: Set<string>) => void, p: string, other?: [Set<string>, (s: Set<string>) => void]) => {
+    const next = new Set(set);
+    if (next.has(p)) next.delete(p);
+    else {
+      next.add(p);
+      if (other) {
+        const o = new Set(other[0]);
+        o.delete(p);
+        other[1](o);
+      }
+    }
+    setter(next);
+  };
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !running && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -103,14 +142,22 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
           : kind === 'add-description'
             ? { kind, readmePath: ctx.facts.readme!.path, expected: current ?? '', description }
             : kind === 'start-git'
-              ? { kind }
+              ? { kind, ignore: [...leaveOut], confirmed: [...confirmed] }
               : kind === 'publish-github'
-                ? { kind, repoPath: repo?.path ?? '', name: repoName.trim(), visibility, description: description.trim() || undefined }
+                ? { kind, repoPath, name: repoName.trim(), visibility, description: description.trim() || undefined, confirmed: [...confirmed] }
                 : kind === 'add-licence'
-                  ? { kind, repoPath: repo?.path ?? '', licence: licenceId, holder: holder.trim(), year: Number(year) }
-                  : { kind, repoPath: repo?.path ?? '' };
+                  ? { kind, repoPath, licence: licenceId, holder: holder.trim(), year: Number(year) }
+                  : kind === 'untrack-secrets'
+                    ? { kind, repoPath, paths: paths || [] }
+                    : kind === 'push'
+                      ? { kind, repoPath, confirmed: [...confirmed] }
+                      : { kind, repoPath };
       const res = await window.electronAPI.basicsRun(ctx.projectRoot, action as any);
       setResult(res);
+      // A first attempt may already have fixed .gitignore: show what's left to add, not the old plan.
+      if (kind === 'start-git' || kind === 'update-gitignore') {
+        window.electronAPI.basicsPlanGitignore?.(ctx.projectRoot, repoPath).then(setIgnorePlan).catch(() => {});
+      }
       // The checklist refreshes in the background; the sheet is done as soon as the result is in.
       if (res.ok || (res.wrote && res.wrote.length)) void Promise.resolve(ctx.onChanged()).catch(() => {});
     } catch (e: any) {
@@ -131,7 +178,9 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
           ? /^[A-Za-z0-9._-]{1,100}$/.test(repoName.trim()) && Boolean(gh?.account)
           : kind === 'add-licence'
             ? holder.trim().length > 0 && /^\d{4}$/.test(year)
-            : true);
+            : kind === 'update-gitignore'
+              ? Boolean(ignorePlan && (ignorePlan.additions.length > 0 || !ignorePlan.exists))
+              : true);
 
   const buttonLabel =
     kind === 'create-readme'
@@ -144,10 +193,15 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
             ? `Publish ${visibility}`
             : kind === 'add-licence'
               ? `Add ${licenceId} licence`
-              : 'Push';
+              : kind === 'update-gitignore'
+                ? `Add ${ignorePlan?.additions.length ?? ''} lines`
+                : kind === 'untrack-secrets'
+                  ? 'Stop tracking'
+                  : 'Push';
 
   const input = 'w-full px-3 py-2 rounded-lg bg-[#161616] border border-[#333] text-xs text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:border-indigo-500';
-  const where = repo?.path ? `${repo.path}/` : 'the project folder';
+  const where = repoPath ? `${repoPath}/` : 'the project folder';
+  const gitignoreName = repoPath ? `${repoPath}/.gitignore` : '.gitignore';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={TITLES[kind]}>
@@ -201,13 +255,49 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
           {kind === 'start-git' && (
             <>
               <ol className="space-y-1.5 list-decimal pl-4 marker:text-neutral-500">
-                {!ctx.facts.gitignore && <li>Adds a <span className="font-mono">.gitignore</span> for this stack (always keeps <span className="font-mono">.env</span> files out).</li>}
-                <li>Runs <span className="font-mono">git init</span> on a <span className="font-mono">main</span> branch.</li>
-                <li>Checks every file that would be committed for keys, tokens, env files and files over 50 MB. If any turn up, it stops, removes the new repository and lists them.</li>
+                <li>
+                  <GitignorePlanLine plan={ignorePlan} name=".gitignore" />
+                </li>
+                <li>Runs <span className="font-mono">git init</span> on a <span className="font-mono">main</span> branch. Only files your .gitignore allows are considered.</li>
+                <li>Checks each of those files for keys, tokens, env files and files over 50 MB. If any turn up, it stops, removes the new repository and asks you what to do with each.</li>
                 <li>Makes the first commit: <span className="font-mono">chore: initial commit</span>.</li>
               </ol>
               <p className="text-neutral-500 flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Everything stays on this PC. Publishing to GitHub is a separate step.
+              </p>
+            </>
+          )}
+
+          {kind === 'update-gitignore' && (
+            <>
+              <GitignorePlanLine plan={ignorePlan} name={gitignoreName} />
+              <p className="text-neutral-500">
+                Lines are only added, never changed or removed. Files git already tracks stay tracked: if a secret file is committed, use Stop tracking secrets.
+              </p>
+            </>
+          )}
+
+          {kind === 'untrack-secrets' && (
+            <>
+              <p>These files are committed, so anyone with the repository can read them:</p>
+              <ul className="space-y-1 pl-4 list-disc marker:text-rose-400">
+                {(paths || []).map((p) => (
+                  <li key={p} className="font-mono text-neutral-100">
+                    {p}
+                  </li>
+                ))}
+              </ul>
+              <ol className="space-y-1.5 list-decimal pl-4 marker:text-neutral-500">
+                <li>Adds them to {gitignoreName}.</li>
+                <li>
+                  Removes them from git with <span className="font-mono">git rm --cached</span>. <span className="text-neutral-100">The files stay on this PC.</span>
+                </li>
+                <li>
+                  Commits just that: <span className="font-mono">chore: stop tracking secret files</span>.
+                </li>
+              </ol>
+              <p className="text-amber-300/90">
+                Older commits still contain them. If this repository was ever pushed, treat those keys as exposed and replace them (for Supabase, rotate them in the dashboard).
               </p>
             </>
           )}
@@ -321,14 +411,46 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
                 <span className="leading-relaxed">{result.message}</span>
               </div>
               {result.findings && result.findings.length > 0 && (
-                <ul className="mt-2 space-y-1 pl-6">
-                  {result.findings.slice(0, 20).map((f) => (
-                    <li key={f.path + f.reason} className="text-[11px]">
-                      {f.path && <span className="font-mono text-rose-50">{f.path}</span>} <span className="text-rose-200/80">{f.reason}</span>
+                <>
+                <ul className="mt-2 space-y-1.5 pl-6">
+                  {result.findings.slice(0, 30).map((f) => (
+                    <li key={f.path + f.reason} className="text-[11px] flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>
+                        {f.path && <span className="font-mono text-rose-50">{f.path}</span>} <span className="text-rose-200/80">{f.reason}</span>
+                      </span>
+                      {/* Start git can leave any file out; a name-only flag can also be waved through once checked. */}
+                      {f.path && kind === 'start-git' && (
+                        <label className="inline-flex items-center gap-1 text-rose-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="accent-indigo-500"
+                            checked={leaveOut.has(f.path)}
+                            onChange={() => toggleIn(leaveOut, setLeaveOut, f.path, [confirmed, setConfirmed])}
+                          />
+                          Leave out of git
+                        </label>
+                      )}
+                      {f.path && f.level === 'review' && (
+                        <label className="inline-flex items-center gap-1 text-rose-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="accent-indigo-500"
+                            checked={confirmed.has(f.path)}
+                            onChange={() => toggleIn(confirmed, setConfirmed, f.path, [leaveOut, setLeaveOut])}
+                          />
+                          I checked it: include it
+                        </label>
+                      )}
                     </li>
                   ))}
-                  {result.findings.length > 20 && <li className="text-[11px] text-rose-200/70">…and {result.findings.length - 20} more</li>}
+                  {result.findings.length > 30 && <li className="text-[11px] text-rose-200/70">…and {result.findings.length - 30} more</li>}
                 </ul>
+                {kind === 'start-git' && result.findings.some((f) => f.level === 'block' && !/^\.env/.test(f.path.split('/').pop() || '')) && (
+                  <p className="mt-2 pl-6 text-[11px] text-rose-100/80">
+                    A key written into code is safest moved into <span className="font-mono">.env</span> (read it with process.env), then replaced if it was ever shared. Leaving the file out of git also works, but then the file isn't backed up either.
+                  </p>
+                )}
+                </>
               )}
               {result.url && (
                 <button type="button" onClick={() => window.electronAPI?.basicsOpenUrl?.(result.url!)} className="mt-2 ml-6 inline-flex items-center gap-1 text-[11px] text-emerald-200 hover:text-white underline">
@@ -361,3 +483,30 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
     </div>
   );
 };
+
+/** "Adds these lines to .gitignore: …", or that it already covers everything. */
+function GitignorePlanLine({ plan, name }: { plan: { exists: boolean; additions: string[] } | null; name: string }) {
+  if (!plan) return <span className="text-neutral-500">Reading {name}…</span>;
+  if (!plan.exists)
+    return (
+      <span>
+        Creates <span className="font-mono">{name}</span> for this stack. It keeps <span className="font-mono">.env</span> files, keys and build folders out.
+      </span>
+    );
+  if (plan.additions.length === 0)
+    return (
+      <span>
+        Your <span className="font-mono">{name}</span> already keeps <span className="font-mono">.env</span> files, keys and build folders out.
+      </span>
+    );
+  return (
+    <span>
+      Adds to your <span className="font-mono">{name}</span> (existing lines are kept):{' '}
+      {plan.additions.map((l) => (
+        <code key={l} className="mx-0.5 px-1.5 py-0.5 rounded bg-[#262626] border border-[#333] text-[11px] text-neutral-100">
+          {l}
+        </code>
+      ))}
+    </span>
+  );
+}

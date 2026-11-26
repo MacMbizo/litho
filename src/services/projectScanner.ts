@@ -52,6 +52,7 @@ declare global {
       basicsRun?: (projectRoot: string, action: BasicsAction) => Promise<BasicsActionResult>;
       basicsGhStatus?: () => Promise<{ installed: boolean; account?: string }>;
       basicsGitUser?: () => Promise<string>;
+      basicsPlanGitignore?: (projectRoot: string, repoPath?: string) => Promise<{ exists: boolean; additions: string[] }>;
       basicsRead?: (roots: string[]) => Promise<Record<string, ProjectBasicsFacts>>;
       basicsOpenUrl?: (url: string) => Promise<boolean>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;

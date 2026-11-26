@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { ProjectBasicsFacts, RepoFacts } from '../../services/projectBasics';
 import { BasicsActionSheet, type BasicsActionContext, type BasicsSheetKind } from './BasicsActionSheet';
-import { BookOpenText, CircleAlert, CircleCheck, CircleX, CloudUpload, EyeOff, FolderX, GitBranch, Github, ListChecks, Scale, Undo2 } from 'lucide-react';
+import { BookOpenText, CircleAlert, CircleCheck, CircleX, CloudUpload, EyeOff, FolderX, GitBranch, Github, KeyRound, ListChecks, Scale, Undo2 } from 'lucide-react';
 import type { BasicsCheck, BasicsCheckId, BasicsReport } from '../../services/projectBasics';
 import { timeAgo } from './StackFreshnessPanel';
 
@@ -11,6 +11,7 @@ const CHECK_ICON: Record<BasicsCheckId, React.FC<{ className?: string }>> = {
   remote: Github,
   pushed: CloudUpload,
   gitignore: EyeOff,
+  secrets: KeyRound,
   licence: Scale,
 };
 
@@ -52,11 +53,18 @@ interface PlannedFix {
   kind: BasicsSheetKind;
   label: string;
   repo?: RepoFacts;
+  repoPath?: string;
+  paths?: string[];
 }
 
 /** The fix offered for a check, if DocAtlas can do it. */
 function fixFor(c: BasicsCheck, facts: ProjectBasicsFacts): PlannedFix | null {
   const readable = facts.repos.filter((r) => !r.error);
+  if (c.id === 'secrets') {
+    const repo = readable.find((r) => r.trackedSecrets?.length);
+    return repo ? { kind: 'untrack-secrets', label: 'Stop tracking', repo, paths: repo.trackedSecrets } : null;
+  }
+  if (c.id === 'gitignore' && c.status !== 'pass') return { kind: 'update-gitignore', label: facts.gitignore ? 'Fix .gitignore' : 'Add .gitignore', repoPath: facts.gitignoreDir ?? readable[0]?.path ?? '' };
   if (c.id === 'readme') return c.status === 'fail' ? { kind: 'create-readme', label: 'Create README' } : c.status === 'warn' ? { kind: 'add-description', label: 'Add description' } : null;
   if (c.id === 'git' && c.status === 'fail') return { kind: 'start-git', label: 'Start git' };
   // The licence belongs with the code: in the repo's folder when the repo lives in a subfolder.
@@ -157,6 +165,8 @@ export const ProjectBasicsPanel: React.FC<Props> = ({ report, checkedAt, ignored
           kind={open.kind}
           ctx={actions}
           repo={open.repo}
+          repoPath={open.repoPath}
+          paths={open.paths}
           suggestedDescription={open.kind === 'publish-github' ? report.description?.text || manifestText : manifestText}
           onClose={() => setOpen(null)}
         />

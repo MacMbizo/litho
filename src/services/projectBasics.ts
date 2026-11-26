@@ -19,6 +19,8 @@ export interface RepoFacts {
   dirty: number;
   /** git could not be read (not installed, unsafe directory, timeout). */
   error?: string;
+  /** Committed files that hold secrets by their kind (.env, keys, credential files). */
+  trackedSecrets?: string[];
 }
 
 export interface ProjectBasicsFacts {
@@ -28,11 +30,14 @@ export interface ProjectBasicsFacts {
   /** Empty when no repo was found at the root or up to 3 levels below it. */
   repos: RepoFacts[];
   gitignore: boolean;
+  /** Safety lines the existing .gitignore lacks (e.g. ".env"), and the folder it's in ('' = root). */
+  gitignoreGaps?: string[];
+  gitignoreDir?: string;
   licence: { file?: string; kind?: string } | null;
   checkedAt: string;
 }
 
-export type BasicsCheckId = 'readme' | 'git' | 'remote' | 'pushed' | 'gitignore' | 'licence';
+export type BasicsCheckId = 'readme' | 'git' | 'remote' | 'pushed' | 'gitignore' | 'secrets' | 'licence';
 export type BasicsStatus = 'pass' | 'warn' | 'fail';
 
 export interface BasicsCheck {
@@ -351,9 +356,31 @@ export function assessProjectBasics(facts: ProjectBasicsFacts | undefined): Basi
     );
   }
 
+  const tracked = readable.flatMap((r) => (r.trackedSecrets || []).map((p) => (r.path ? `${r.path}/${p}` : p)));
+  if (tracked.length > 0) {
+    checks.push({
+      id: 'secrets',
+      label: 'Secrets in git',
+      status: 'fail',
+      chip: 'Secrets in git',
+      required: true,
+      detail: `Committed: ${tracked.slice(0, 5).join(', ')}${tracked.length > 5 ? ', …' : ''}. Anyone with the repository can read them. Stop tracking them, and replace any keys that were ever pushed.`,
+    });
+  }
+
+  const gaps = facts.gitignoreGaps || [];
   checks.push(
-    facts.gitignore
-      ? { id: 'gitignore', label: '.gitignore', status: 'pass', required: false, detail: 'Has a .gitignore.' }
+    facts.gitignore && gaps.length > 0
+      ? {
+          id: 'gitignore',
+          label: '.gitignore',
+          status: 'warn',
+          chip: gaps.includes('.env') ? '.env not ignored' : gaps.some((l) => l.startsWith('.env')) ? 'Env file not ignored' : '.gitignore gaps',
+          required: false,
+          detail: `Doesn't keep out: ${gaps.join(', ')}.${gaps.some((l) => l.startsWith('.env')) ? ' Env files usually hold keys.' : ''}`,
+        }
+      : facts.gitignore
+      ? { id: 'gitignore', label: '.gitignore', status: 'pass', required: false, detail: 'Keeps .env files, keys and build folders out of git.' }
       : {
           id: 'gitignore',
           label: '.gitignore',

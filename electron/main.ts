@@ -4,7 +4,7 @@ import fs from 'fs';
 import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 import { FixController } from './fixRunner';
 import { readProjectBasics } from './projectBasics';
-import { BasicsController, ghStatus, gitUserName } from './basicsFixer';
+import { BasicsController, ghStatus, gitUserName, planGitignore } from './basicsFixer';
 import { summarizeScan, type ProjectSummaryPayload } from '../src/services/projectSummary';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
@@ -122,6 +122,13 @@ const basicsController = new BasicsController(isKnownProjectRoot);
 ipcMain.handle('basics:run', (_, projectRoot: string, action: unknown) => basicsController.run(projectRoot, action));
 ipcMain.handle('basics:ghStatus', () => ghStatus());
 ipcMain.handle('basics:gitUser', () => gitUserName());
+// What Start git / Fix .gitignore would add to a project's .gitignore (read-only), shown before confirming.
+ipcMain.handle('basics:planGitignore', async (_, projectRoot: string, repoPath?: string) => {
+  if (typeof projectRoot !== 'string' || !(await isKnownProjectRoot(projectRoot))) throw new Error('Unknown project');
+  const rel = typeof repoPath === 'string' ? repoPath.replace(/\\/g, '/') : '';
+  if (rel.split('/').includes('..') || path.isAbsolute(rel)) throw new Error('Invalid folder');
+  return planGitignore(path.join(projectRoot, rel));
+});
 // Basics only (README, git, licence), for remembered projects saved before basics existed: far lighter than a rescan.
 ipcMain.handle('basics:read', async (_, roots: unknown) => {
   if (!Array.isArray(roots)) return {};

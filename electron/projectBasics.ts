@@ -15,6 +15,7 @@ import {
   type RepoFacts,
 } from '../src/services/projectBasics';
 import { IGNORED_DIRS } from './stackFiles';
+import { ignoreGaps, riskyFileName } from '../src/services/basicsFixes';
 
 const GIT_TIMEOUT_MS = 10_000;
 const README_MAX = 8 * 1024;
@@ -54,11 +55,13 @@ async function exists(p: string): Promise<boolean> {
 async function readRepo(projectRoot: string, rel: string): Promise<RepoFacts> {
   const dir = path.join(projectRoot, rel);
   try {
-    const [status, remotes] = await Promise.all([
+    const [status, remotes, files] = await Promise.all([
       gitReadOnly(dir, ['status', '--porcelain=v2', '--branch']),
       gitReadOnly(dir, ['remote', '-v']),
+      gitReadOnly(dir, ['ls-files', '-z']).catch(() => ''),
     ]);
-    return { path: rel, ...parseStatusV2(status), remotes: parseRemotes(remotes) };
+    const trackedSecrets = files.split('\0').filter((p) => p && riskyFileName(p));
+    return { path: rel, ...parseStatusV2(status), remotes: parseRemotes(remotes), trackedSecrets };
   } catch (err: any) {
     return { path: rel, hasCommits: false, remotes: [], ahead: 0, behind: 0, dirty: 0, error: err?.message || 'git failed' };
   }
@@ -166,7 +169,22 @@ export async function readProjectBasics(projectRoot: string): Promise<ProjectBas
 
   const gitignoreDirs = ['', ...repoPaths.filter(Boolean)];
   let gitignore = false;
-  for (const rel of gitignoreDirs) if (await exists(path.join(projectRoot, rel, '.gitignore'))) gitignore = true;
+  let gitignoreDir: string | undefined;
+  let gitignoreGaps: string[] | undefined;
+  for (const rel of gitignoreDirs) {
+    const file = path.join(projectRoot, rel, '.gitignore');
+    if (!(await exists(file))) continue;
+    gitignore = true;
+    if (gitignoreDir === undefined) {
+      gitignoreDir = rel;
+      try {
+        const entries = (await fs.promises.readdir(path.join(projectRoot, rel), { withFileTypes: true })).map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+        gitignoreGaps = ignoreGaps(await readHead(file, 64 * 1024), entries);
+      } catch {
+        // unreadable
+      }
+    }
+  }
 
   let licence: ProjectBasicsFacts['licence'] = null;
   for (const rel of gitignoreDirs) {
@@ -190,5 +208,5 @@ export async function readProjectBasics(projectRoot: string): Promise<ProjectBas
   }
   if (!licence && pkgLicence) licence = { kind: pkgLicence };
 
-  return { readme, manifestDescriptions, repos, gitignore, licence, checkedAt: new Date().toISOString() };
+  return { readme, manifestDescriptions, repos, gitignore, gitignoreDir, gitignoreGaps, licence, checkedAt: new Date().toISOString() };
 }
