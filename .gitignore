@@ -30,6 +30,8 @@ tests/dist
 # Local brainstorm mockups and browser-test artifacts
 .superpowers/
 .playwright-mcp/
+# Editor-generated agent config (local paths, e.g. the paperRock MCP server)
+.agents/
 
 # Added by DocAtlas: keep secrets and build output out of git
 .env
