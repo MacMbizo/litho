@@ -37,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (110) | `npm test` |
+| Unit tests (118) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -260,6 +260,30 @@ The owner's standard: every project has a README that says what it is, a git rep
 - **Not verified:**
   - A real `gh repo create`, single or queued.
   - Light theme.
+- **.gitignore and secrets (built 2026-11-26, branch `feat/basics-gitignore`):**
+  - **Start git reads `.gitignore` first:**
+    - **Prompted by:** DrivingSchool, whose Vite-starter `.gitignore` had no `.env` rule.
+    - **What it adds:** only what's missing (`.env`, `.env.*`, `!.env.example`, `*.pem`, `*.key`, and build folders that are present), using `missingIgnoreLines` and `appendIgnoreLines`. Existing lines are never changed.
+    - **Before running:** the sheet shows the lines via IPC `basics:planGitignore`.
+    - **The matcher (`isIgnored`):** last rule wins, `!` negation, `dir/`, anchoring, `**`, escapes, and ignored parents.
+  - **Per-file decisions on findings:** `ScanFinding.level` is `block` or `review`.
+    - "Leave out of git" works for any file. It adds an anchored `/path` line and retries.
+    - "I checked it: include it" only works for `review` findings, i.e. names like `TEST_CREDENTIALS.md`. `stillBlocking` never lets a `block` through.
+  - **New secret patterns:**
+    - Supabase `service_role` JWTs, found by decoding the payload (`anon` keys pass).
+    - `sb_secret_` keys.
+    - Database URLs with passwords. Local hosts and placeholders pass.
+    - Every match is checked, so an earlier placeholder can't hide a later real key.
+  - **Existing repos:**
+    - **"Secrets in git":** `RepoFacts.trackedSecrets` from `git ls-files`. The Stop tracking action updates `.gitignore`, runs `git rm --cached` and makes one commit, and refuses when other changes are staged. History keeps the files, so the UI says to rotate keys.
+    - **".env not ignored":** `ignoreGaps`, real risks only, with a Fix .gitignore action. Android `debug.keystore` is exempt.
+  - **Owner's data, read-only:**
+    - **DrivingSchool:** 7 scripts hardcode a Supabase **service_role** key, for example `create-test-users.js` and `fix-admin-password.js`. Start git now stops on them. The owner should move the key into `.env` and rotate it if it was ever shared.
+    - **Other projects:** none has secrets committed. 9 don't ignore `.env`: agent-skills, aves, DrivingSchool, instruction-scanner, litho, paperRock, sightline, wellness. F4 doesn't ignore `.vercel/`.
+  - **Verified:**
+    - 118 unit tests.
+    - E2E suites: gitignore 13/13, basics 19/19, fixes 17/17, queue 15/15.
+    - A run on a copy of DrivingSchool: `.gitignore` fixed, the 7 key scripts and the credentials doc flagged, nothing committed.
 - **Idea not built:** an AI-written description, once project 2 exists.
 
 ## Next: AI foundation (project 2), then design suite (project 3)
