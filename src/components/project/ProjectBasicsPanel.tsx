@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
+import type { ProjectBasicsFacts, RepoFacts } from '../../services/projectBasics';
+import { BasicsActionSheet, type BasicsActionContext, type BasicsSheetKind } from './BasicsActionSheet';
 import { BookOpenText, CircleAlert, CircleCheck, CircleX, CloudUpload, EyeOff, FolderX, GitBranch, Github, ListChecks, Scale, Undo2 } from 'lucide-react';
 import type { BasicsCheck, BasicsCheckId, BasicsReport } from '../../services/projectBasics';
 import { timeAgo } from './StackFreshnessPanel';
@@ -42,11 +44,37 @@ interface Props {
   /** Present when the project can be marked as "not a project" (portfolio only). */
   ignored?: boolean;
   onToggleIgnored?: () => void;
+  /** Present on the desktop app: enables the fix buttons. */
+  actions?: BasicsActionContext;
+}
+
+interface PlannedFix {
+  kind: BasicsSheetKind;
+  label: string;
+  repo?: RepoFacts;
+}
+
+/** The fix offered for a check, if DocAtlas can do it. */
+function fixFor(c: BasicsCheck, facts: ProjectBasicsFacts): PlannedFix | null {
+  const readable = facts.repos.filter((r) => !r.error);
+  if (c.id === 'readme') return c.status === 'fail' ? { kind: 'create-readme', label: 'Create README' } : c.status === 'warn' ? { kind: 'add-description', label: 'Add description' } : null;
+  if (c.id === 'git' && c.status === 'fail') return { kind: 'start-git', label: 'Start git' };
+  if (c.id === 'remote' && c.status === 'fail') {
+    const repo = readable.find((r) => r.remotes.length === 0 && r.hasCommits);
+    return repo ? { kind: 'publish-github', label: 'Publish to GitHub', repo } : null;
+  }
+  if (c.id === 'pushed' && c.status !== 'pass') {
+    const repo = readable.find((r) => r.hasCommits && r.remotes.length > 0 && r.branch && (!r.upstream || r.ahead > 0));
+    return repo ? { kind: 'push', label: repo.upstream ? `Push ${repo.ahead}` : 'Push', repo } : null;
+  }
+  return null;
 }
 
 /** Description + the README / git / remote / pushed / .gitignore / licence checklist. */
-export const ProjectBasicsPanel: React.FC<Props> = ({ report, checkedAt, ignored, onToggleIgnored }) => {
+export const ProjectBasicsPanel: React.FC<Props> = ({ report, checkedAt, ignored, onToggleIgnored, actions }) => {
   const level = BASICS_LEVEL_STYLE[report.level];
+  const [open, setOpen] = useState<PlannedFix | null>(null);
+  const manifestText = actions?.facts.manifestDescriptions[0]?.text || '';
   return (
     <section className="space-y-3" aria-label="Project basics">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -81,6 +109,7 @@ export const ProjectBasicsPanel: React.FC<Props> = ({ report, checkedAt, ignored
           {report.checks.map((c) => {
             const Icon = CHECK_ICON[c.id];
             const st = STATUS_ICON[c.status];
+            const fix = actions ? fixFor(c, actions.facts) : null;
             return (
               <li key={c.id} className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-[#1d1d1d] border border-[#2a2a2a]">
                 <st.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${st.tone}`} aria-label={c.status} />
@@ -94,6 +123,15 @@ export const ProjectBasicsPanel: React.FC<Props> = ({ report, checkedAt, ignored
                   </div>
                   <p className="text-[11px] text-neutral-400 leading-relaxed mt-0.5 break-words">{c.detail}</p>
                 </div>
+                {fix && (
+                  <button
+                    type="button"
+                    onClick={() => setOpen(fix)}
+                    className="shrink-0 self-center px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-[11px] font-semibold text-indigo-200 transition"
+                  >
+                    {fix.label}
+                  </button>
+                )}
               </li>
             );
           })}
@@ -110,6 +148,16 @@ export const ProjectBasicsPanel: React.FC<Props> = ({ report, checkedAt, ignored
           {ignored ? <Undo2 className="w-3.5 h-3.5" /> : <FolderX className="w-3.5 h-3.5" />}
           {ignored ? 'Count this as a project again' : 'Not a project? Hide it from the portfolio'}
         </button>
+      )}
+
+      {open && actions && (
+        <BasicsActionSheet
+          kind={open.kind}
+          ctx={actions}
+          repo={open.repo}
+          suggestedDescription={open.kind === 'publish-github' ? report.description?.text || manifestText : manifestText}
+          onClose={() => setOpen(null)}
+        />
       )}
     </section>
   );

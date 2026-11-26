@@ -4,6 +4,7 @@ import fs from 'fs';
 import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 import { FixController } from './fixRunner';
 import { readProjectBasics } from './projectBasics';
+import { BasicsController, ghStatus } from './basicsFixer';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -111,6 +112,18 @@ ipcMain.handle('fix:openFile', (_, runId: string, index: number) => {
 ipcMain.handle('fix:openLog', async (_, runId: string) => {
   const err = await shell.openPath(fixController.logPath(runId));
   if (err) throw new Error(err);
+  return true;
+});
+
+// --- Project basics fixes (README, description, start git, publish to GitHub, push) ---------
+// Same rule as the stack fixer: only projects the app scanned or remembers; one action at a time.
+const basicsController = new BasicsController(isKnownProjectRoot);
+ipcMain.handle('basics:run', (_, projectRoot: string, action: unknown) => basicsController.run(projectRoot, action));
+ipcMain.handle('basics:ghStatus', () => ghStatus());
+ipcMain.handle('basics:openUrl', async (_, url: string) => {
+  // Only GitHub repository pages a publish just returned.
+  if (typeof url !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/?$/.test(url)) throw new Error('Blocked URL');
+  await shell.openExternal(url);
   return true;
 });
 

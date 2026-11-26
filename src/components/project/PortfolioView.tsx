@@ -1023,6 +1023,21 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                 checkedAt={detail.workspace.basics?.checkedAt}
                 ignored={isIgnored(detail)}
                 onToggleIgnored={onToggleIgnored ? () => onToggleIgnored(detail.workspace.rootPath) : undefined}
+                actions={
+                  detail.workspace.basics
+                    ? {
+                        projectRoot: detail.workspace.rootPath,
+                        projectName: detail.workspace.name,
+                        facts: detail.workspace.basics,
+                        stack: {
+                          frameworks: detail.auditReport.stackProfile.frameworks,
+                          scripts: detail.auditReport.stackProfile.scripts,
+                          packageManager: detail.auditReport.stackProfile.packageManager,
+                        },
+                        onChanged: () => onRescanProject(detail.workspace.rootPath),
+                      }
+                    : undefined
+                }
               />
               <div className="border-t border-[#2a2a2a]" />
               <StackFreshnessPanel

@@ -3,6 +3,7 @@ import { MarkdownService } from './markdown';
 import { archivePathFor, rewriteRelativeLinksForMove } from './docRemediation';
 import type { FixRecipe } from './fixRecipes';
 import type { ProjectBasicsFacts } from './projectBasics';
+import type { BasicsAction, BasicsActionResult } from './basicsFixes';
 import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
 declare global {
@@ -56,6 +57,9 @@ declare global {
       fixOpenFile?: (runId: string, index: number) => Promise<boolean>;
       fixOpenLog?: (runId: string) => Promise<boolean>;
       onFixEvent?: (callback: (e: FixEvent) => void) => () => void;
+      basicsRun?: (projectRoot: string, action: BasicsAction) => Promise<BasicsActionResult>;
+      basicsGhStatus?: () => Promise<{ installed: boolean; account?: string }>;
+      basicsOpenUrl?: (url: string) => Promise<boolean>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }

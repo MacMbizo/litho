@@ -42,6 +42,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('fix:event', listener);
     };
   },
+  basicsRun: (projectRoot: string, action: unknown) => ipcRenderer.invoke('basics:run', projectRoot, action),
+  basicsGhStatus: () => ipcRenderer.invoke('basics:ghStatus'),
+  basicsOpenUrl: (url: string) => ipcRenderer.invoke('basics:openUrl', url),
   onFsChanged: (callback: (data: any) => void) => {
     const listener = (_: unknown, data: any) => callback(data);
     ipcRenderer.on('fs:changed', listener);

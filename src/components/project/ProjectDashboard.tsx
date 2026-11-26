@@ -438,7 +438,21 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
           {project.basics && project.kind !== 'notes' && (
             <div className="rounded-2xl bg-[#1e1e1e] border border-[#2d2d2d] p-5">
-              <ProjectBasicsPanel report={assessProjectBasics(project.basics)} checkedAt={project.basics.checkedAt} />
+              <ProjectBasicsPanel
+                report={assessProjectBasics(project.basics)}
+                checkedAt={project.basics.checkedAt}
+                actions={{
+                  projectRoot: project.rootPath,
+                  projectName: project.name,
+                  facts: project.basics,
+                  stack: {
+                    frameworks: liveStackProfile.frameworks,
+                    scripts: liveStackProfile.scripts,
+                    packageManager: liveStackProfile.packageManager,
+                  },
+                  onChanged: () => onRefreshProject(),
+                }}
+              />
             </div>
           )}
 
