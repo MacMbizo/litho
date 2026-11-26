@@ -5,7 +5,10 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
 ## Start here (next session)
 
 - **Next task:** project 3, the **design suite from a PRD** (see "Next" below). The AI foundation is complete. Load the `claude-api` skill before writing Claude code.
+- **REMINDER (owner, 2026-11-26): write light colours later.** The theme toggle is hidden (`SHOW_THEME_TOGGLE = false` in `src/components/layout/Sidebar.tsx`) because no light styles exist. Doing it properly means moving the fixed dark hex colours into theme tokens and designing a light palette; show the owner mockups to pick from first. Then flip the flag.
 - **Owner's providers (2026-11-26):** Ollama now, probably Gemini, OpenRouter for exploring later; Claude optional. Their real `ai-config.json` was written with provider `ollama`, model `qwen3.5:4b` (the file didn't exist yet). See "Providers and local models" below.
+- **Personas installed (2026-11-26):** eight personas are in the owner's `Documents\DocAtlas Notes\Personas` and are also the app's starter set (`electron/ai/starterPersonas.ts`): Project analyst (chat), Executive briefer (summaries), Document librarian (classify), Agentic coder (agent sandbox; coding agents with `ornith:9b` in other apps), Code reviewer, Software architect, Technical editor, Product strategist. 560–650 words each, all above Claude's cache minimum (unit test enforces > 800 estimated tokens). The owner's settings assign chat, summarize, categorize and agent to the first four. Checked with `qwen3.5:4b`: Classify still returns valid JSON with the librarian, and files the AI spec better (document / AI Ops, 4 tags, versus project / Backend, 9 tags without).
+- **Other repos (2026-11-26):** the `.gitignore` fix was pushed for aves and sightline. Not pushed: `antigravity-skills` (its remote is `rmyndharis/antigravity-skills`, a third-party repo, not the owner's), and instruction-scanner and paperRock (no remote: local-only repos).
 - **Waiting on the owner:**
   - Add a Gemini key (and later an OpenRouter key) in AI & Settings. No real Gemini or OpenRouter answer has been tested (no keys); both are covered by stub-server tests. With a Gemini key, check: project chat asks a detailed question and shows a green "read in full" source chip, and Settings picked a current Flash model by itself.
   - Optional: a Claude key. A real Claude answer has never been tested. With a key: Software architect persona, ask twice within 5 minutes (the second says "N tokens from cache").
@@ -18,7 +21,7 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
     - `.env.example` gained that variable's name, with no value.
     - The originals are backed up in the session scratchpad (`…/scratchpad/ds-backup`). They still contain the key, so delete them once the owner is happy.
     - `.env` also has `VITE_WHATSAPP_ACCESS_TOKEN` and `VITE_PAYNOW_INTEGRATION_KEY`. They're unused in `src` and absent from `dist`, but `VITE_` values get bundled into the site if they're ever used.
-  - **Fix .gitignore, committed locally only (not pushed), each commit `.gitignore` only:**
+  - **Fix .gitignore, one commit each, `.gitignore` only** (aves and sightline pushed 2026-11-26; see "Other repos" above):
     - agent-skills (`antigravity-skills/`): `0f8870c`
     - aves: `0b38bcc`
     - instruction-scanner: `23515e5`

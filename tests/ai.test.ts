@@ -213,7 +213,10 @@ test('starter personas: cacheable size, parse cleanly, added once, never overwri
     fs.mkdirSync(folder);
     fs.writeFileSync(path.join(folder, 'Technical editor.md'), 'my own');
     const added = await addStarterPersonas(folder);
-    assert.deepStrictEqual(added, ['Software architect.md', 'Product strategist.md']);
+    assert.deepStrictEqual(
+      added,
+      STARTER_PERSONAS.map((p) => p.id).filter((id) => id !== 'Technical editor.md')
+    );
     assert.strictEqual(fs.readFileSync(path.join(folder, 'Technical editor.md'), 'utf-8'), 'my own', 'existing file kept');
     assert.deepStrictEqual(await addStarterPersonas(folder), [], 'second run adds nothing');
   } finally {

@@ -39,6 +39,8 @@ import { DocAtlasMark } from '../brand/BrandMarks';
 const LARGE_TREE_FILES = 200;
 /** Docs listed under each project in the Portfolio tab before "+N more". */
 const PORTFOLIO_FILES_SHOWN = 60;
+/** The light/dark toggle stays hidden until a light palette exists (owner, 2026-11-26). */
+const SHOW_THEME_TOGGLE = false;
 
 interface SidebarProps {
   files: MarkdownFile[];
@@ -452,13 +454,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
           </button>
-          <button
-            onClick={onToggleTheme}
-            className="p-1.5 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-neutral-200 transition"
-            title="Toggle theme"
-          >
-            {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-          </button>
+          {/* TODO(light theme): hidden until light colours exist. The toggle only swapped a class; no light
+              styles were ever written (components use fixed dark colours). Set SHOW_THEME_TOGGLE once a
+              light palette is designed. See HANDOFF.md "Light theme". */}
+          {SHOW_THEME_TOGGLE && (
+            <button
+              onClick={onToggleTheme}
+              className="p-1.5 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-neutral-200 transition"
+              title="Toggle theme"
+            >
+              {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+            </button>
+          )}
           <button
             onClick={onToggleCollapse}
             className="p-1.5 rounded hover:bg-[#2c2c2c] text-neutral-400 hover:text-white transition"

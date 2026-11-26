@@ -452,7 +452,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
                     >
                       <FilePlus className="w-3.5 h-3.5" />
                       {missingStarters.length === STARTER_PERSONAS.length
-                        ? `Add ${STARTER_PERSONAS.length} starter personas (${STARTER_PERSONAS.map((p) => p.id.replace(/\.md$/i, '')).join(', ')})`
+                        ? `Add ${STARTER_PERSONAS.length} starter personas`
                         : `Add the missing starter persona${missingStarters.length > 1 ? 's' : ''}`}
                     </button>
                   )}
