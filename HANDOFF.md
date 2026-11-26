@@ -1,6 +1,6 @@
 # Handoff: Litho (Markdown studio) / DocAtlas
 
-_Last updated 2026-11-14. Branch `main`, pushed to https://github.com/MacMbizo/litho. Feature branches are merged into `main`._
+_Last updated 2026-11-26. `main` (with the stack fixer merged) is pushed to https://github.com/MacMbizo/litho. Project basics is on branch `feat/project-basics` (pushed, not yet merged). Feature branches are merged into `main`._
 
 ## Name and brand (2026-11-14)
 
@@ -37,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (74) | `npm test` |
+| Unit tests (106) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -190,6 +190,53 @@ The owner chose the order **1 stack fixer → 2 AI foundation → 3 design suite
   - Continue to SDK N+1 (needs a real Expo run).
 - **Deferred minors from the review:** the checkpoint defaults on even if files became dirty after the sheet opened; a failed checkpoint leaves `git add -A` staged and Stop cannot cancel a running checkpoint; runId filtering relies on IPC ordering; `parsePorcelain` should use `-z`; child env could set `NoDefaultCurrentDirectoryInExePath` and ignore stdin; Stop on macOS/Linux leaves grandchildren; commit/apply are not locked during a run.
 - **Note:** DocAtlas tracks only the main framework packages (`TRACKED_NPM_PACKAGES`), so a tiny package like `is-number` never gets an issue or a Fix.
+
+## Project basics (built 2026-11-26, branch `feat/project-basics`)
+
+The owner's standard: every project has a README that says what it is, a git repo and a GitHub remote. Design: `docs/superpowers/specs/2026-11-26-project-basics-design.md`.
+
+- **Not duplicated:**
+  - EnvAtlas has its own description extraction and reads the remote from `.git/config`, but has no checks or writes.
+  - Cairn Guardian only records `has_readme`/`has_git` and never writes into project folders.
+- **Facts (read-only):**
+  - `electron/projectBasics.ts` runs on every scan and is stored as `workspace.basics` in the portfolio snapshot.
+  - Git is read with `--no-optional-locks -c core.fsmonitor=false`. Tests and the e2e run hash `.git` before and after.
+  - When the root has no `.git`, it looks for nested repos up to 3 levels down (e.g. `AIPrompt/Vercel/pigeonprompt`). That repo's README and licence count.
+- **Assessment (pure):** `src/services/projectBasics.ts`.
+  - **Description:** the first README paragraph, else a `package.json`/`Cargo.toml`/`pyproject.toml` description.
+  - **What isn't a description:** a starter README (Lovable, Vite, Next, Expo, CRA) is flagged "Template README"; paperRock and `pr` are real cases. Also skipped: metadata lines (`**Key:** value`), a bare path, nav lines of links, short bold pseudo-headings, and anything after the third `##` section.
+  - **Checks:** README, Git and Remote are the standard (required). Pushed, .gitignore and Licence only warn.
+- **UI:**
+  - **Cards:** the About line plus gap chips.
+  - **KPI tile:** "Project basics".
+  - **Filters:** "Missing basics", and "Not projects (n)" for scratch folders, stored in `userData/docatlas/project-prefs.json`.
+  - **Checklist:** in the drawer (now "Project details") and on Project Overview.
+- **Fixes:**
+  - **Code:** `electron/basicsFixer.ts` (`BasicsController`, IPC `basics:run`, `basics:ghStatus`, `basics:openUrl`), `src/services/basicsFixes.ts` and `BasicsActionSheet.tsx`.
+  - **Rules:** known roots only; one action at a time; nothing runs until the sheet's button is pressed.
+  - **Create README:** `wx`, never overwrites.
+  - **Add description:** compare-and-write against the file read just before.
+  - **Start git:** writes a `.gitignore` if missing, runs `git init -b main`, scans the files, then commits `chore: initial commit`. If the scan finds anything, it stops and deletes its own `.git`. It refuses nested repos, a folder inside another repo, and a missing `user.email`.
+  - **Publish to GitHub:** `gh repo create --private` by default; the About line becomes the GitHub description.
+  - **Push:** sets `-u` the first time and scans files in the unpushed commits.
+  - **Secret scan:** env files, keys and certs, GitHub/OpenAI/Anthropic/AWS/Stripe/Slack/npm tokens, files over 50 MB, more than 5,000 files on a first commit. Firebase `AIza` web keys are deliberately **not** flagged, because they're public by design.
+- **Verified:**
+  - 106 unit tests, with real temp repos and a local bare remote.
+  - E2E on `C:\Prj`, 19/19: 30 projects, KPI 5/30 complete, descriptions, chips, nested repo, filters, Not a project and restore, search on description, snapshot relaunch, no console errors, **no `.git` under `C:\Prj` changed**.
+  - E2E on throwaway fixtures, 17/17: create README; Start git blocked by a token file, then committed; the Publish sheet (gh signed in, private default; cancelled); push to a bare remote; add description to a Lovable README.
+- **Not verified:**
+  - A real `gh repo create`. It wasn't run, so no GitHub repo was created; it's covered by refusal tests only.
+  - Light theme.
+- **Calibration on `C:\Prj` (2026-11-26):**
+  - **Complete:** aegis, agent-skills, aves, envatlas, nutrition.
+  - **No README and no git:** anemerge, Back Cement, DevSet, forexTrader, guardian, mail, mdfiles, merge, nomos, SmoothLite, trial. Some are scratch folders: use "Not a project".
+  - **Local only:** C1, F4, instruction-scanner, paperRock.
+  - **Template README:** paperRock, pr.
+  - **Unpushed:** mccShepherd (25), pigeon (49).
+- **Ideas not built:**
+  - A "Licence" fix (AGPL-3.0 is the owner's default).
+  - A bulk "Fix basics for all" queue.
+  - An AI-written description, once project 2 exists.
 
 ## Next: AI foundation (project 2), then design suite (project 3)
 
