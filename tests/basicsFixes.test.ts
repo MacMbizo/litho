@@ -300,3 +300,57 @@ test('push: sets upstream the first time, scans unpushed commits, refuses secret
     fs.rmSync(remote, { recursive: true, force: true });
   }
 });
+
+// --- Fix several at once ------------------------------------------------------------
+
+import { orderedSteps, planQueue, queueReadme, queueRepoName, stepKey } from '../src/services/basicsQueue.ts';
+
+const qFacts = (over: Record<string, unknown> = {}) => ({
+  readme: null,
+  manifestDescriptions: [],
+  repos: [],
+  gitignore: false,
+  licence: null,
+  checkedAt: '',
+  ...over,
+});
+const qStack = { frameworks: ['React'], scripts: { dev: 'vite' }, packageManager: 'npm' };
+
+test('planQueue: local fixes ticked by default, licence/publish/push opt-in, README needs a description', () => {
+  const plan = planQueue([
+    { rootPath: 'C:/P/a', name: 'a', facts: qFacts({ manifestDescriptions: [{ source: 'package.json', text: 'Tracks things' }] }) as any, stack: qStack },
+    { rootPath: 'C:/P/b', name: 'b', facts: qFacts() as any, stack: qStack },
+    {
+      rootPath: 'C:/P/c',
+      name: 'c',
+      facts: qFacts({
+        readme: { path: 'README.md', text: '# c\n\nA thing.' },
+        licence: { kind: 'MIT' },
+        gitignore: true,
+        repos: [{ path: '', branch: 'main', hasCommits: true, remotes: [{ name: 'origin', url: 'x' }], upstream: 'origin/main', ahead: 2, behind: 0, dirty: 0 }],
+      }) as any,
+      stack: qStack,
+    },
+    { rootPath: 'C:/P/done', name: 'done', facts: qFacts({ readme: { path: 'README.md', text: '# d\n\nDone app here.' }, licence: { kind: 'MIT' }, repos: [{ path: '', branch: 'main', hasCommits: true, remotes: [{ name: 'origin', url: 'x' }], upstream: 'origin/main', ahead: 0, behind: 0, dirty: 0 }] }) as any, stack: qStack },
+  ]);
+  assert.deepStrictEqual(plan.map((p) => p.name), ['a', 'b', 'c']);
+  const a = plan[0];
+  assert.deepStrictEqual(a.steps.map((s) => [s.kind, s.available, s.defaultOn]), [
+    ['create-readme', true, true],
+    ['add-licence', true, false],
+    ['start-git', true, true],
+    ['publish-github', true, false],
+  ]);
+  assert.strictEqual(plan[1].steps[0].available, false);
+  assert.match(plan[1].steps[0].reason!, /Create README on the project/);
+  assert.deepStrictEqual(plan[2].steps.map((s) => s.label), ['Push 2']);
+
+  // Run order is README, licence, start git, publish, push regardless of tick order.
+  const ticked = new Set([stepKey('C:/P/a', 'publish-github'), stepKey('C:/P/a', 'start-git'), stepKey('C:/P/a', 'add-licence'), stepKey('C:/P/a', 'create-readme')]);
+  assert.deepStrictEqual(orderedSteps(a, ticked).map((s) => s.kind), ['create-readme', 'add-licence', 'start-git', 'publish-github']);
+  assert.strictEqual(a.steps.find((s) => s.kind === 'publish-github')!.dependsOn, 'start-git');
+  const input = { rootPath: 'C:/P/a', name: 'My App', facts: qFacts({ manifestDescriptions: [{ source: 'package.json', text: 'Tracks things' }] }) as any, stack: qStack };
+  assert.match(queueReadme(input), /^# My App\n\nTracks things/);
+  assert.strictEqual(queueRepoName(input, ''), 'My-App');
+  assert.strictEqual(queueRepoName(input, 'Vercel/pigeonprompt'), 'pigeonprompt');
+});

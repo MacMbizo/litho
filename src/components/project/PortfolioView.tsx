@@ -36,6 +36,7 @@ import { FreshnessBadge, StackFreshnessPanel, timeAgo } from './StackFreshnessPa
 import { parseSemverMajor } from '../../services/stackInspector';
 import { assessProjectBasics, type BasicsReport } from '../../services/projectBasics';
 import { BASICS_CHIP, BasicsChipIcon, ProjectBasicsPanel } from './ProjectBasicsPanel';
+import { BasicsQueueSheet } from './BasicsQueueSheet';
 
 interface PortfolioViewProps {
   roots: string[];
@@ -52,7 +53,7 @@ interface PortfolioViewProps {
   onScanCurrentWorkspaceParent: () => void;
   onRefreshPortfolio: () => void;
   onRemoveRoot: (root: string) => void;
-  onRescanProject: (rootPath: string) => void;
+  onRescanProject: (rootPath: string) => void | Promise<void>;
   onOpenProject: (workspace: ProjectWorkspace, targetFileId?: string) => void;
   /** Notes outside any project (desktop only). */
   onNewNote?: () => void;
@@ -136,6 +137,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
   const [query, setQuery] = useState('');
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [detailRoot, setDetailRoot] = useState<string | null>(null);
+  const [showQueue, setShowQueue] = useState(false);
 
   useEffect(() => {
     try {
@@ -667,6 +669,16 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                   {label}
                 </button>
               ))}
+              {filter === 'basics' && (
+                <button
+                  type="button"
+                  onClick={() => setShowQueue(true)}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold border bg-indigo-500 hover:bg-indigo-600 text-white border-indigo-400/50 flex items-center gap-1.5 transition"
+                >
+                  <ListChecks className="w-3.5 h-3.5" />
+                  Fix several at once…
+                </button>
+              )}
               <span className="w-px h-4 bg-[#333] mx-1" />
               <label className="text-[11px] text-neutral-500 flex items-center gap-1.5">
                 Sort
@@ -996,6 +1008,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
           </div>
         )}
       </div>
+
+      {showQueue && <BasicsQueueSheet projects={projects} onRescanProject={onRescanProject} onClose={() => setShowQueue(false)} />}
 
       {/* Stack detail drawer */}
       {detail && (
