@@ -1,4 +1,6 @@
-export type DocType = 'project' | 'agent' | 'skill' | 'document' | 'note';
+import type { ProjectBasicsFacts } from '../services/projectBasics';
+
+export type DocType ='project' | 'agent' | 'skill' | 'document' | 'note';
 
 export type TaskItem = {
   id: string;
@@ -62,6 +64,8 @@ export interface ProjectWorkspace {
   configFiles?: Record<string, string>;
   /** Per app folder ('' = root): whether node_modules exists and installed versions of key packages. */
   installedPackages?: Record<string, { present: boolean; versions: Record<string, string> }>;
+  /** README, description, git, remote and licence facts (desktop scans only). */
+  basics?: ProjectBasicsFacts;
 }
 
 export type ViewMode = 'editor' | 'database' | 'tasks' | 'agent-hub' | 'graph' | 'project-overview' | 'portfolio';

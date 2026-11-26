@@ -13,7 +13,9 @@ import {
   FolderGit2,
   FolderPlus,
   FolderSearch,
+  FolderX,
   Gauge,
+  ListChecks,
   Layers3,
   Monitor,
   NotebookPen,
@@ -32,6 +34,8 @@ import { DocAtlasMark } from '../brand/BrandMarks';
 import { assessStackFreshness, issueWeight } from '../../services/stackFreshness';
 import { FreshnessBadge, StackFreshnessPanel, timeAgo } from './StackFreshnessPanel';
 import { parseSemverMajor } from '../../services/stackInspector';
+import { assessProjectBasics, type BasicsReport } from '../../services/projectBasics';
+import { BASICS_CHIP, BasicsChipIcon, ProjectBasicsPanel } from './ProjectBasicsPanel';
 
 interface PortfolioViewProps {
   roots: string[];
@@ -53,10 +57,13 @@ interface PortfolioViewProps {
   /** Notes outside any project (desktop only). */
   onNewNote?: () => void;
   onOpenMarkdownFile?: () => void;
+  /** Folders marked "Not a project": left out of the cards and every count. */
+  ignoredRoots?: string[];
+  onToggleIgnored?: (rootPath: string) => void;
 }
 
 type PortfolioTab = 'projects' | 'stack';
-type PortfolioFilter = 'all' | 'at-risk' | 'upgrades' | 'expo' | 'docs';
+type PortfolioFilter = 'all' | 'at-risk' | 'upgrades' | 'expo' | 'docs' | 'basics' | 'ignored';
 type PortfolioSort = 'risk' | 'docs' | 'name';
 
 const PREFS_KEY = 'docatlas_portfolio_prefs_v1';
@@ -88,7 +95,7 @@ function readPrefs(): { tab: PortfolioTab; filter: PortfolioFilter; sort: Portfo
     const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
     return {
       tab: raw.tab === 'stack' ? 'stack' : 'projects',
-      filter: ['all', 'at-risk', 'upgrades', 'expo', 'docs'].includes(raw.filter) ? raw.filter : 'all',
+      filter: ['all', 'at-risk', 'upgrades', 'expo', 'docs', 'basics', 'ignored'].includes(raw.filter) ? raw.filter : 'all',
       sort: ['risk', 'docs', 'name'].includes(raw.sort) ? raw.sort : 'risk',
     };
   } catch {
@@ -119,6 +126,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
   onOpenProject,
   onNewNote,
   onOpenMarkdownFile,
+  ignoredRoots = [],
+  onToggleIgnored,
 }) => {
   const initial = useMemo(readPrefs, []);
   const [tab, setTab] = useState<PortfolioTab>(initial.tab);
@@ -143,11 +152,25 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [detailRoot]);
 
+  const allProjects = projects;
+  const ignoredSet = useMemo(() => new Set(ignoredRoots.map((r) => r.toLowerCase())), [ignoredRoots]);
+  const isIgnored = (p: PortfolioProjectSummary) => ignoredSet.has(p.workspace.rootPath.toLowerCase());
+  const ignoredProjects = useMemo(() => allProjects.filter(isIgnored), [allProjects, ignoredSet]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Everything below (counts, radar, matrix) only sees real projects.
+  projects = useMemo(() => allProjects.filter((p) => !isIgnored(p)), [allProjects, ignoredSet]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const basics = useMemo(() => {
+    const map = new Map<string, BasicsReport>();
+    for (const p of allProjects) map.set(p.workspace.rootPath, assessProjectBasics(p.workspace.basics));
+    return map;
+  }, [allProjects]);
+  const bs = (p: PortfolioProjectSummary) => basics.get(p.workspace.rootPath)!;
+
   const freshness = useMemo(() => {
     const map = new Map<string, StackFreshnessReport>();
-    for (const p of projects) map.set(p.workspace.rootPath, assessStackFreshness(p.auditReport.stackProfile));
+    for (const p of allProjects) map.set(p.workspace.rootPath, assessStackFreshness(p.auditReport.stackProfile));
     return map;
-  }, [projects]);
+  }, [allProjects]);
   const fr = (p: PortfolioProjectSummary) => freshness.get(p.workspace.rootPath)!;
 
   const stats = useMemo(() => {
@@ -172,9 +195,23 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
       : 0;
     const upgrades = reports.reduce((a, r) => a + r.issues.filter((i) => i.severity !== 'minor').length, 0);
     const docAttention = projects.filter(docNeedsAttention).length;
-    return { total, avgScore, avgGrade, atRisk, stale, aging, checking, apps, expoApps: expoApps.length, latestSdk, expoBehind, upgrades, docAttention };
+    const basicsReports = projects.map(bs).filter((b) => b.level !== 'unknown');
+    const basicsComplete = basicsReports.filter((b) => b.level === 'complete').length;
+    const failing = (id: string) => basicsReports.filter((b) => b.checks.some((c) => c.id === id && c.status === 'fail')).length;
+    const basicsGaps = [
+      [failing('readme'), 'no README'],
+      [failing('git'), 'no git'],
+      [failing('remote'), 'local only'],
+      [basicsReports.filter((b) => b.checks.some((c) => c.id === 'pushed' && c.status !== 'pass')).length, 'unpushed'],
+    ]
+      .filter(([n]) => (n as number) > 0)
+      .map(([n, label]) => `${n} ${label}`);
+    return {
+      total, avgScore, avgGrade, atRisk, stale, aging, checking, apps, expoApps: expoApps.length, latestSdk, expoBehind, upgrades, docAttention,
+      basicsChecked: basicsReports.length, basicsComplete, basicsGaps,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, freshness]);
+  }, [projects, freshness, basics]);
 
   /** The most damaging platform problems across every project: the "what will bite me next" strip. */
   const radar = useMemo(() => {
@@ -190,11 +227,11 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return projects
+    return (filter === 'ignored' ? ignoredProjects : projects)
       .filter((p) => {
         const r = fr(p);
         if (q) {
-          const hay = `${p.workspace.name} ${p.workspace.rootPath} ${p.auditReport.stackProfile.frameworks.join(' ')} ${r.issues
+          const hay = `${p.workspace.name} ${p.workspace.rootPath} ${bs(p).description?.text || ''} ${p.auditReport.stackProfile.frameworks.join(' ')} ${r.issues
             .map((i) => i.title)
             .join(' ')}`.toLowerCase();
           if (!hay.includes(q)) return false;
@@ -203,6 +240,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
         if (filter === 'upgrades') return r.issues.some((i) => i.severity !== 'minor');
         if (filter === 'expo') return (p.auditReport.stackProfile.apps || []).some((a) => a.expoSdkVersion);
         if (filter === 'docs') return docNeedsAttention(p);
+        if (filter === 'basics') return bs(p).level === 'missing' || bs(p).level === 'partial';
         return true;
       })
       .sort((a, b) => {
@@ -217,7 +255,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
         );
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, freshness, query, filter, sortBy]);
+  }, [projects, ignoredProjects, freshness, basics, query, filter, sortBy]);
 
   const matrix = useMemo(() => {
     return MATRIX_PACKAGES.map(({ name, label }) => {
@@ -233,7 +271,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
     }).filter((g) => g.rows.length > 0);
   }, [projects]);
 
-  const detail = detailRoot ? projects.find((p) => p.workspace.rootPath === detailRoot) : undefined;
+  const detail = detailRoot ? allProjects.find((p) => p.workspace.rootPath === detailRoot) : undefined;
   const busy = scanning || refreshing;
 
   const scanParentButton = currentWorkspaceParent && !roots.some((r) => r.toLowerCase() === currentWorkspaceParent.toLowerCase()) && (
@@ -278,7 +316,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
   // ---------------------------------------------------------------------------
   // Empty / browser states
   // ---------------------------------------------------------------------------
-  if (!isDesktop || projects.length === 0) {
+  if (!isDesktop || allProjects.length === 0) {
     return (
       <div className="h-full overflow-y-auto bg-[#191919] text-neutral-100">
         <div className="max-w-3xl mx-auto px-6 py-16">
@@ -432,6 +470,26 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
       },
       active: tab === 'projects' && filter === 'docs',
     },
+    {
+      key: 'basics',
+      label: 'Project basics',
+      value: stats.basicsChecked ? (
+        <span>
+          <span className={stats.basicsComplete === stats.basicsChecked ? 'text-emerald-300' : ''}>{stats.basicsComplete}</span>
+          <span className="text-neutral-500 text-base">/{stats.basicsChecked}</span>
+        </span>
+      ) : (
+        '–'
+      ),
+      sub: !stats.basicsChecked ? 'rescan to check README and git' : stats.basicsGaps.length ? stats.basicsGaps.slice(0, 2).join(' · ') : 'README, git and GitHub everywhere',
+      Icon: ListChecks,
+      accent: 'text-emerald-300',
+      onClick: () => {
+        setTab('projects');
+        setFilter('basics');
+      },
+      active: tab === 'projects' && filter === 'basics',
+    },
   ];
 
   return (
@@ -503,7 +561,7 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
         </div>
 
         {/* KPI tiles */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {kpis.map((k) => (
             <button
               key={k.key}
@@ -595,6 +653,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                   ['upgrades', 'Needs upgrades'],
                   ['expo', 'Expo'],
                   ['docs', 'Doc issues'],
+                  ['basics', 'Missing basics'],
+                  ...(ignoredProjects.length > 0 || filter === 'ignored' ? [['ignored', `Not projects (${ignoredProjects.length})`]] : []),
                 ] as Array<[PortfolioFilter, string]>
               ).map(([key, label]) => (
                 <button
@@ -640,6 +700,8 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                 const topIssues = report.issues.slice(0, 3);
                 const rescanning = rescanningProjectRoot === workspace.rootPath;
                 const frameworks = auditReport.stackProfile.frameworks.filter((f) => f !== 'TypeScript');
+                const basicsReport = bs(item);
+                const basicsGaps = basicsReport.checks.filter((c) => c.status !== 'pass' && c.chip);
 
                 return (
                   <div
@@ -656,6 +718,12 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                           {isActive && (
                             <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 shrink-0">
                               Open
+                            </span>
+                          )}
+                          {isIgnored(item) && (
+                            <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#2a2a2a] text-neutral-400 shrink-0 flex items-center gap-1">
+                              <FolderX className="w-2.5 h-2.5" />
+                              Not a project
                             </span>
                           )}
                         </h3>
@@ -677,6 +745,18 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                         </span>
                       </div>
                     </div>
+
+                    {/* What this project is, in one line (README first paragraph, else the manifest) */}
+                    {basicsReport.description ? (
+                      <p
+                        className="text-[12px] text-neutral-300 leading-relaxed line-clamp-2 -mt-1"
+                        title={`${basicsReport.description.text}\n\nfrom ${basicsReport.description.source}`}
+                      >
+                        {basicsReport.description.text}
+                      </p>
+                    ) : basicsReport.level !== 'unknown' ? (
+                      <p className="text-[12px] text-neutral-500 italic -mt-1">No description: nothing says what this project is.</p>
+                    ) : null}
 
                     {frameworks.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -732,6 +812,36 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                         </button>
                       )}
                     </div>
+
+                    {/* Project basics: README, git, remote, pushed, .gitignore, licence */}
+                    {basicsReport.level !== 'unknown' && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {basicsGaps.length === 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setDetailRoot(workspace.rootPath)}
+                            className="text-[10px] px-2 py-0.5 rounded-md border bg-emerald-500/5 text-emerald-300/90 border-emerald-500/20 flex items-center gap-1 hover:brightness-125 transition"
+                            title="README, git, GitHub remote, pushed, .gitignore and licence are all in place"
+                          >
+                            <ListChecks className="w-3 h-3" />
+                            Basics complete
+                          </button>
+                        ) : (
+                          basicsGaps.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => setDetailRoot(workspace.rootPath)}
+                              className={`text-[10px] px-2 py-0.5 rounded-md border flex items-center gap-1 hover:brightness-125 transition ${BASICS_CHIP[c.status as 'warn' | 'fail']}`}
+                              title={c.detail}
+                            >
+                              <BasicsChipIcon id={c.id} className="w-3 h-3" />
+                              {c.chip}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
 
                     {/* Doc metrics */}
                     <div className="flex flex-wrap items-center gap-3 text-[11px] text-neutral-400 pt-3 border-t border-[#2a2a2a]">
@@ -889,12 +999,12 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
 
       {/* Stack detail drawer */}
       {detail && (
-        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label={`${detail.workspace.name} stack freshness`}>
+        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label={`${detail.workspace.name} project details`}>
           <div className="absolute inset-0 bg-black/50" onClick={() => setDetailRoot(null)} />
           <div className="relative w-full max-w-xl h-full bg-[#1a1a1a] border-l border-[#2d2d2d] shadow-2xl flex flex-col">
             <div className="px-5 py-4 border-b border-[#2a2a2a] flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-wider text-neutral-500 font-semibold">Stack freshness</div>
+                <div className="text-[11px] uppercase tracking-wider text-neutral-500 font-semibold">Project details</div>
                 <h2 className="text-base font-bold text-white truncate">{detail.workspace.name}</h2>
                 <p className="text-[11px] font-mono text-neutral-500 truncate">{detail.workspace.rootPath}</p>
               </div>
@@ -907,7 +1017,14 @@ export const PortfolioView: React.FC<PortfolioViewProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-5">
+            <div className="flex-1 overflow-y-auto p-5 space-y-6">
+              <ProjectBasicsPanel
+                report={bs(detail)}
+                checkedAt={detail.workspace.basics?.checkedAt}
+                ignored={isIgnored(detail)}
+                onToggleIgnored={onToggleIgnored ? () => onToggleIgnored(detail.workspace.rootPath) : undefined}
+              />
+              <div className="border-t border-[#2a2a2a]" />
               <StackFreshnessPanel
                 report={fr(detail)}
                 profile={detail.auditReport.stackProfile}

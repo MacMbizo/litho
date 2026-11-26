@@ -12,7 +12,7 @@ export interface PortfolioSnapshot {
   savedAt: string;
   projects: Array<{
     scannedAt: string;
-    workspace: Pick<ProjectWorkspace, 'name' | 'rootPath' | 'configFiles' | 'installedPackages'>;
+    workspace: Pick<ProjectWorkspace, 'name' | 'rootPath' | 'configFiles' | 'installedPackages' | 'basics'>;
     auditReport: PortfolioProjectSummary['auditReport'];
   }>;
 }
@@ -39,6 +39,7 @@ export function toSnapshot(roots: string[], projects: PortfolioProjectSummary[])
         rootPath: p.workspace.rootPath,
         configFiles: p.workspace.configFiles,
         installedPackages: p.workspace.installedPackages,
+        basics: p.workspace.basics,
       },
       auditReport: p.auditReport,
     })),
@@ -58,6 +59,7 @@ export function fromSnapshot(snapshot: PortfolioSnapshot): PortfolioProjectSumma
       files: [],
       configFiles: p.workspace.configFiles || {},
       installedPackages: p.workspace.installedPackages,
+      basics: p.workspace.basics,
     },
   }));
 }
@@ -86,6 +88,35 @@ export function savePortfolioSnapshot(roots: string[], projects: PortfolioProjec
       // disk full / permissions: the in-memory portfolio still works
     });
   }, 800);
+}
+
+// --- "Not a project" -------------------------------------------------------
+// Scratch folders the owner marked as not being projects. Stored apart from the snapshot so a rescan
+// (which rebuilds the snapshot) never forgets them.
+const PREFS_STORE = 'project-prefs';
+
+/** Adds the folder when absent, removes it when present (case-insensitive, as Windows paths are). */
+export function toggleIgnored(list: string[], rootPath: string): string[] {
+  const key = rootPath.replace(/[\\/]+$/, '').toLowerCase();
+  const has = list.some((r) => r.replace(/[\\/]+$/, '').toLowerCase() === key);
+  return has ? list.filter((r) => r.replace(/[\\/]+$/, '').toLowerCase() !== key) : [...list, rootPath];
+}
+
+export async function loadIgnoredProjects(): Promise<string[]> {
+  if (!isStoreAvailable()) return [];
+  try {
+    const data = await window.electronAPI!.storeRead!(PREFS_STORE);
+    return Array.isArray(data?.ignored) ? data.ignored.filter((r: unknown) => typeof r === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveIgnoredProjects(ignored: string[]): void {
+  if (!isStoreAvailable()) return;
+  window.electronAPI!.storeWrite!(PREFS_STORE, { ignored }).catch(() => {
+    // disk full / permissions: the choice still holds for this session
+  });
 }
 
 /** Which configured root a project belongs to (longest matching prefix). */

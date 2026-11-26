@@ -21,6 +21,8 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { StackFreshnessPanel } from './StackFreshnessPanel';
+import { ProjectBasicsPanel } from './ProjectBasicsPanel';
+import { assessProjectBasics } from '../../services/projectBasics';
 import { assessStackFreshness } from '../../services/stackFreshness';
 import { ProjectWorkspace, ViewMode } from '../../types/document';
 import { DocTaxonomyStatus, ProjectDocAuditReport } from '../../types/docAudit';
@@ -431,6 +433,12 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           {aiError && (
             <div className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
               {aiError}
+            </div>
+          )}
+
+          {project.basics && project.kind !== 'notes' && (
+            <div className="rounded-2xl bg-[#1e1e1e] border border-[#2d2d2d] p-5">
+              <ProjectBasicsPanel report={assessProjectBasics(project.basics)} checkedAt={project.basics.checkedAt} />
             </div>
           )}
 

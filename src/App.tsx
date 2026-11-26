@@ -34,8 +34,11 @@ import { buildTreeFromFiles } from './services/fileTree';
 import {
   SNAPSHOT_STALE_MS,
   fromSnapshot,
+  loadIgnoredProjects,
   loadPortfolioSnapshot,
+  saveIgnoredProjects,
   savePortfolioSnapshot,
+  toggleIgnored,
 } from './services/portfolioStore';
 import { AISummaryModal } from './components/ai/AISummaryModal';
 import { AISettingsModal } from './components/ai/AISettingsModal';
@@ -264,6 +267,19 @@ const AppContent: React.FC = () => {
     if (!portfolioLoadedRef.current) return;
     savePortfolioSnapshot(portfolioRoots, portfolioProjects);
   }, [portfolioRoots, portfolioProjects]);
+
+  // Folders marked "Not a project" (scratch folders): kept out of the portfolio's cards and counts.
+  const [ignoredProjectRoots, setIgnoredProjectRoots] = useState<string[]>([]);
+  useEffect(() => {
+    loadIgnoredProjects().then(setIgnoredProjectRoots);
+  }, []);
+  const handleToggleIgnoredProject = useCallback((rootPath: string) => {
+    setIgnoredProjectRoots((prev) => {
+      const next = toggleIgnored(prev, rootPath);
+      saveIgnoredProjects(next);
+      return next;
+    });
+  }, []);
 
   // The active project's portfolio entry always reflects live, in-editor state.
   const displayedPortfolio = useMemo(
@@ -1398,6 +1414,8 @@ const AppContent: React.FC = () => {
               onOpenProject={handleOpenPortfolioProject}
               onNewNote={canUseNotes ? handleNewNote : undefined}
               onOpenMarkdownFile={canUseNotes ? handleOpenMarkdownFile : undefined}
+              ignoredRoots={ignoredProjectRoots}
+              onToggleIgnored={handleToggleIgnoredProject}
             />
           )}
 

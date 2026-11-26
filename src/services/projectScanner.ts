@@ -2,6 +2,7 @@ import { MarkdownFile, FileTreeNode, ProjectWorkspace } from '../types/document'
 import { MarkdownService } from './markdown';
 import { archivePathFor, rewriteRelativeLinksForMove } from './docRemediation';
 import type { FixRecipe } from './fixRecipes';
+import type { ProjectBasicsFacts } from './projectBasics';
 import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
 declare global {
@@ -15,6 +16,7 @@ declare global {
         tree: any;
         configFiles?: Record<string, string>;
         installedPackages?: ProjectWorkspace['installedPackages'];
+        basics?: ProjectBasicsFacts;
       }>;
       scanPortfolioRoot: (dirPath: string) => Promise<{
         rootPath: string;
@@ -25,6 +27,7 @@ declare global {
           tree: any;
           configFiles?: Record<string, string>;
           installedPackages?: ProjectWorkspace['installedPackages'];
+          basics?: ProjectBasicsFacts;
         }>;
       }>;
       readFile: (filePath: string) => Promise<string>;
@@ -133,6 +136,7 @@ export class ProjectScannerService {
       files,
       configFiles: result.configFiles || {},
       installedPackages: result.installedPackages,
+      basics: result.basics,
     };
   }
 
@@ -491,6 +495,7 @@ export class ProjectScannerService {
         files: parsedFiles,
         configFiles: p.configFiles || {},
         installedPackages: p.installedPackages,
+        basics: p.basics,
       };
     });
     return { rootPath: raw.rootPath, projects };

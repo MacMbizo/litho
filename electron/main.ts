@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 import { FixController } from './fixRunner';
+import { readProjectBasics } from './projectBasics';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -327,13 +328,14 @@ ipcMain.handle('fs:scanDirectory', async (_, dirPath: string, opts?: { watch?: b
   try {
     rememberProjectRoot(dirPath);
     const rootName = path.basename(dirPath);
-    const [{ files, tree }, { configFiles, installedPackages }] = await Promise.all([
+    const [{ files, tree }, { configFiles, installedPackages }, basics] = await Promise.all([
       scanDirectoryRecursive(dirPath, dirPath),
       readStackConfigFiles(dirPath),
+      readProjectBasics(dirPath).catch(() => undefined),
     ]);
 
     // Setup live file watcher for external changes (with debounce). Background rescans skip this.
-    if (opts?.watch === false) return { rootPath: dirPath, rootName, files, tree, configFiles, installedPackages };
+    if (opts?.watch === false) return { rootPath: dirPath, rootName, files, tree, configFiles, installedPackages, basics };
     if (activeWatcher) {
       activeWatcher.close();
     }
@@ -356,7 +358,7 @@ ipcMain.handle('fs:scanDirectory', async (_, dirPath: string, opts?: { watch?: b
       console.warn('File watcher setup skipped or unsupported:', watchErr);
     }
 
-    return { rootPath: dirPath, rootName, files, tree, configFiles, installedPackages };
+    return { rootPath: dirPath, rootName, files, tree, configFiles, installedPackages, basics };
   } catch (err: any) {
     throw new Error(`Failed to scan directory: ${err.message}`);
   }
@@ -372,6 +374,7 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
       tree: any;
       configFiles: Record<string, string>;
       installedPackages: Record<string, { present: boolean; versions: Record<string, string> }>;
+      basics?: Awaited<ReturnType<typeof readProjectBasics>>;
     }> = [];
 
     const candidateDirs = entries.filter(
@@ -386,7 +389,8 @@ ipcMain.handle('fs:scanPortfolioRoot', async (_, rootDir: string) => {
         pathExists(path.join(projDir, '.git')),
       ]);
       if (files.length === 0 && Object.keys(configFiles).length === 0 && !hasGit) return null;
-      return { rootPath: projDir, rootName: entry.name, files, tree, configFiles, installedPackages };
+      const basics = await readProjectBasics(projDir).catch(() => undefined);
+      return { rootPath: projDir, rootName: entry.name, files, tree, configFiles, installedPackages, basics };
     });
 
     for (const p of scanned) if (p) {
