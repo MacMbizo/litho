@@ -1,12 +1,12 @@
 # Handoff: Litho (Markdown studio) / DocAtlas
 
-_Last updated 2026-11-26 (end of session). Everything is merged into `main` and pushed to https://github.com/MacMbizo/litho (head `952d9c7`): stack fixer, project basics, licence, queue, the .gitignore and secrets work, and the AI gateway (slice 1). There's no open feature branch. Feature branches are merged into `main`._
+_Last updated 2026-11-26 (end of session). Everything is merged into `main` and pushed to https://github.com/MacMbizo/litho: stack fixer, project basics, licence, queue, the .gitignore and secrets work, and the whole AI foundation (slice 1 gateway, slice 2 personas and caching, slice 3 project chat pipeline). There's no open feature branch. Feature branches are merged into `main`._
 
 ## Start here (next session)
 
-- **Next task:** AI foundation **slice 3** (finder → condenser → thinker). Slice 2 (personas + prompt caching) is built on branch `feat/ai-personas`; see "Slice 2" below. Spec: `docs/superpowers/specs/2026-11-26-ai-foundation-design.md`. Load the `claude-api` skill before writing Claude code.
+- **Next task:** project 3, the **design suite from a PRD** (see "Next" below). The AI foundation is complete. Load the `claude-api` skill before writing Claude code.
 - **Waiting on the owner:**
-  - Add a real Claude key in AI & Settings. A real Claude answer has never been tested (no key was used, to avoid spending credit).
+  - Add a real Claude key in AI & Settings. A real Claude answer has never been tested (no key was used, to avoid spending credit). With a key, check: project chat with the Software architect persona, ask twice within 5 minutes (the second says "N tokens from cache"), and a question that makes Claude read a doc (a green "read in full" source chip).
   - Re-pick the Ollama model if they used Ollama before. The legacy `llama3` default isn't installed; `llama3.2` is.
   - Rotate the DrivingSchool Supabase `service_role` key if it was ever shared or pushed.
   - Decide whether DrivingSchool's `TEST_CREDENTIALS.md`, `fix-admin-password.js` and `reset-passwords.js` (test-account passwords) go into git.
@@ -65,7 +65,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (132) | `npm test` |
+| Unit tests (148) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -338,7 +338,17 @@ The owner's standard: every project has a README that says what it is, a git rep
      - **Too short to cache:** the persona picker marks personas under about 600 estimated tokens "no cache", since Claude silently skips caching below 512.
      - **Verified:** 132 unit tests. The SDK's real request body, captured against a local stub server: persona block with `cache_control` (and `ttl: "1h"` when chosen), then the task block, plus adaptive thinking, effort and fallbacks. Electron e2e 18/18 (isolated userData and Notes folder): empty state, starters added, create and open, list with sizes, choices and 1h saved, a real `llama3.2` summary that followed a pirate persona, missing persona shown and a plain error, no console errors. Script: `scratchpad/e2e/e2e-personas.cjs` (not in the repo).
      - **Not verified:** a real Claude cache hit (`cache_read_input_tokens` > 0) needs the owner's key: pick a persona for Project chat (e.g. Software architect) and ask twice within 5 minutes; the second answer should say "N tokens from cache". Light theme.
-   - **Next: slice 3 (finder → condenser → thinker).**
+   - **Slice 3, done 2026-11-26 (project chat as finder → condenser → thinker):**
+     - **Finder** (`electron/ai/finder.ts`): each doc split into up to 4 chunks of 1,500 chars (title first), embedded with `nomic-embed-text` (`search_document:`/`search_query:` prefixes), a doc scores as its best chunk. Vectors cached as raw float32 in `userData/docatlas/ai-cache/embeddings/<model>/<hh>/<sha256>.bin`, shared across projects. Falls back to keyword scoring when Ollama or the model is missing, and says so (with `ollama pull nomic-embed-text`).
+     - **Condenser** (`electron/ai/condenser.ts`): docs up to 4,000 chars go whole; longer ones get a `llama3.2` doc card (or the Ollama model chosen in Settings), cached in `ai-cache/cards/`. No local model: an excerpt card (headings + best-matching paragraph).
+     - **Thinker** (`claudeConverse` in `claude.ts`): Claude gets the persona (cached), DocAtlas audit facts (`src/services/projectFacts.ts`), the top 8 docs condensed and a list of the others, plus a `read_doc` tool (eager input streaming, validated, 60k chars max, 5 tool rounds then `tool_choice: none`). Top-level automatic caching covers the message tail across tool rounds. Gemini/OpenAI/Ollama get the top 3 docs inlined in full (12k chars each) instead.
+     - **Orchestration** (`electron/ai/projectChat.ts`): IPC `ai:projectIndex(key, docs)` / `ai:projectAsk(key, req)`, progress on `ai:progress`. The renderer sends the docs it already holds, so main never reads paths it is handed. Last 4 project indexes kept in memory; repeated index calls with the same docs join one build. Questions work while indexing (keywords until ready, and the answer says so).
+     - **Sources:** every top hit is sent, but only hits within 0.1 of the best similarity (half the best keyword score) are shown, plus docs Claude read (green chip). Calibrated on real `nomic-embed-text` scores.
+     - **UI:** the drawer shows index status, live stages (indexing, finding, cards, thinking), a run line, and renders answers with `ChatMarkdown.tsx` (React elements only, no HTML injection). The browser build keeps the old keyword path.
+     - **Scale (agent-skills, 3,445 docs, 28M chars, read-only):** first index 182 s, later 4.5 s, search 41 ms, cache 36 MB.
+     - **Verified:** 148 unit tests, including the real SDK tool loop against a stub server (tool_use → tool_result on the wire, usage summed, round cap with `tool_choice: none`), answering mid-index, and the Markdown renderer's injection safety. Electron e2e 13/13 on a fixture Notes folder with real `nomic-embed-text` + `llama3.2` (index by meaning, 5 vectors cached, SQLite answer from a doc card, 1 card cached and reused, follow-up, sources filtered, chip opens the doc, no console errors). Personas e2e still 18/18. Scripts: `scratchpad/e2e/e2e-pipeline.cjs`, `scratchpad/scale/scale.ts` (not in the repo).
+     - **Not verified:** a real Claude answer and its `read_doc` use (needs the key); a full index of a real project inside the app (only by script); light theme.
+     - **Known limits:** llama3.2 (3B) is a weak thinker for subtle questions; Claude is the intended thinker. Caches never shrink (about 10 KB per doc version). Chunking reads only the first ~6k chars of each doc for matching; the thinker can still read the rest.
    - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
    - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.
    - Move API keys out of localStorage into Electron `safeStorage`, and make calls from the main process. Today the Gemini key is in the URL and calls come from the renderer.

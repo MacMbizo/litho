@@ -11,7 +11,7 @@
  */
 import path from 'path';
 import { CardCache, condense, type Condensed } from './condenser';
-import { EMBED_MODEL, ProjectIndex, VectorCache, hashText, type PipelineDoc } from './finder';
+import { EMBED_MODEL, ProjectIndex, VectorCache, hashText, type Hit, type PipelineDoc } from './finder';
 import type { AIGateway } from './gateway';
 import type { AIProvider, ChatTurn, CompletionResult } from './types';
 
@@ -108,6 +108,7 @@ export function buildUserMessage(opts: {
 
 export class ProjectChat {
   private indexes = new Map<string, { index: ProjectIndex; signature: string }>();
+  private building = new Map<string, { signature: string; promise: Promise<IndexSummary> }>();
   private vectors: VectorCache;
   private cards: CardCache;
 
@@ -120,15 +121,29 @@ export class ProjectChat {
     this.cards = new CardCache(path.join(cacheDir, 'cards'));
   }
 
-  /** Builds (or reuses) the index for a project's documents. Embeds only what the disk cache lacks. */
+  /**
+   * Builds (or reuses) the index for a project's documents. Embeds only what the disk cache lacks. The
+   * index is usable at once: questions asked while it's still embedding are matched by keywords.
+   */
   async index(key: string, docs: PipelineDoc[], onProgress?: (p: ChatProgress) => void): Promise<IndexSummary> {
     const signature = hashText(docs.map((d) => `${d.id}\0${d.path}\0${d.title}\0${hashText(d.body)}`).join('\n'));
     const existing = this.indexes.get(key);
-    const ollamaUrl = (await this.gateway.getConfig()).ollamaUrl;
     // Reuse when nothing changed, unless it fell back to keywords and Ollama may be up now.
     if (existing && existing.signature === signature && existing.index.mode === 'embeddings') return summary(existing.index);
+    const running = this.building.get(key);
+    if (running && running.signature === signature) return running.promise;
+    const promise = this.build(key, signature, docs, onProgress).finally(() => {
+      if (this.building.get(key)?.promise === promise) this.building.delete(key);
+    });
+    this.building.set(key, { signature, promise });
+    return promise;
+  }
 
+  private async build(key: string, signature: string, docs: PipelineDoc[], onProgress?: (p: ChatProgress) => void): Promise<IndexSummary> {
+    const ollamaUrl = (await this.gateway.getConfig()).ollamaUrl;
     const index = new ProjectIndex(docs);
+    index.reason = 'Still indexing, so this answer matched documents by keywords.';
+    this.remember(key, index, signature);
     const installed = await this.ollama.installed(ollamaUrl);
     const embedModel = installed?.find((m) => m === EMBED_MODEL || m.startsWith(`${EMBED_MODEL}:`));
     if (!installed) index.reason = 'Ollama is not running, so documents are matched by keywords.';
@@ -143,11 +158,14 @@ export class ProjectChat {
         index.reason = `Matching by keywords: embedding failed (${e?.message || e}).`;
       }
     }
+    return summary(index);
+  }
+
+  private remember(key: string, index: ProjectIndex, signature: string) {
     this.indexes.delete(key);
     this.indexes.set(key, { index, signature });
     // Keep the few most recent projects in memory.
     while (this.indexes.size > 4) this.indexes.delete(this.indexes.keys().next().value!);
-    return summary(index);
   }
 
   async ask(
@@ -198,7 +216,11 @@ export class ProjectChat {
       () => buildUserMessage({ facts, question: input.question, condensed, others, inline: { count: INLINE_FULL_DOCS, maxChars: INLINE_DOC_CHARS } })
     );
 
-    const sources: ChatSource[] = condensed.map((c) => ({ id: c.doc.id, path: c.doc.path, title: c.doc.title, kind: c.kind }));
+    // Every top hit is sent (broad questions need them), but only close matches are shown as sources.
+    const strong = new Set(strongHits(hits, index.mode === 'embeddings' && !!embedModel).map((h) => h.doc.id));
+    const sources: ChatSource[] = condensed
+      .filter((c) => strong.has(c.doc.id))
+      .map((c) => ({ id: c.doc.id, path: c.doc.path, title: c.doc.title, kind: c.kind }));
     for (const p of result.read || []) {
       const doc = index.find(p);
       const known = sources.find((s) => s.path === p);
@@ -207,6 +229,16 @@ export class ProjectChat {
     }
     return { ...result, sources, mode: index.mode, reason: index.reason, cardModel };
   }
+}
+
+/**
+ * The hits close to the best one. Measured with nomic-embed-text: a specific question's document scores
+ * 0.15–0.25 above the rest, while a broad question ("summarize the project") scores all within ~0.05.
+ */
+export function strongHits(hits: Hit[], byMeaning: boolean): Hit[] {
+  if (!hits.length) return [];
+  const best = hits[0].score;
+  return hits.filter((h) => (byMeaning ? h.score >= best - 0.1 : h.score >= best / 2));
 }
 
 const summary = (index: ProjectIndex): IndexSummary => ({ docs: index.docs.length, mode: index.mode, ...(index.reason ? { reason: index.reason } : {}) });

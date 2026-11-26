@@ -35,7 +35,7 @@ _2026-11-26. This is project 2 in the owner's order (stack fixer → **AI founda
 - **Caching:** the persona goes in a cached `system` block (`cache_control`). The volatile parts (task, docs) come after it, so a cached persona costs about $0.005 per request on Opus 5.5. The `usage.cache_read_input_tokens` field is shown so the caching can be verified.
 - **Ollama:** `num_ctx` is sized to the persona.
 
-## Slice 3: the finder → condenser → thinker pipeline (next)
+## Slice 3: the finder → condenser → thinker pipeline (built 2026-11-26)
 
 - **Finder:** Ollama `nomic-embed-text` embeddings of each doc, cached by content hash in `userData/docatlas/embeddings/`. It picks the relevant docs.
 - **Condenser:** `llama3.2` writes a "doc card" per file, also cached by content hash.

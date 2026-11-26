@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageSquare, Send, Sparkles, X, RefreshCw, ExternalLink, BookOpenCheck, AlertCircle } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
 import { AIService, describeRun } from '../../services/aiService';
+import { ChatMarkdown } from './ChatMarkdown';
 import type { ChatProgress, ChatSource, IndexSummary } from '../../../electron/ai/projectChat';
 
 interface ProjectChatDrawerProps {
@@ -71,6 +72,7 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
   const [loading, setLoading] = useState(false);
   const [index, setIndex] = useState<{ status: 'idle' | 'indexing' | 'ready' | 'error'; summary?: IndexSummary; error?: string }>({ status: 'idle' });
   const [progress, setProgress] = useState<ChatProgress | null>(null);
+  const [indexProgress, setIndexProgress] = useState<ChatProgress | null>(null);
   const indexRun = useRef(0);
 
   // A new project starts a new conversation.
@@ -87,7 +89,9 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
   useEffect(() => {
     if (!isOpen || !desktop) return;
     return window.electronAPI!.onAiProgress!((e) => {
-      if (e.key === projectKey) setProgress(e);
+      if (e.key !== projectKey) return;
+      if (e.stage === 'index') setIndexProgress(e);
+      else setProgress(e);
     });
   }, [isOpen, desktop, projectKey]);
 
@@ -103,7 +107,7 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
       } catch (e) {
         if (run === indexRun.current) setIndex({ status: 'error', error: stripRemote(e) });
       } finally {
-        if (run === indexRun.current) setProgress(null);
+        if (run === indexRun.current) setIndexProgress(null);
       }
     }, 400);
     return () => clearTimeout(t);
@@ -111,7 +115,8 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
 
   if (!isOpen) return null;
 
-  const busy = loading || (desktop && index.status === 'indexing');
+  // Questions work while indexing: they're matched by keywords until the index is ready.
+  const busy = loading;
 
   const handleSend = async (userQuestion?: string) => {
     const questionText = (userQuestion || query).trim();
@@ -131,7 +136,7 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
           {
             role: 'assistant',
             content: r.text,
-            info: [describeRun(r), readNote].filter(Boolean).join(' · ') || undefined,
+            info: [describeRun(r), readNote, r.mode === 'keywords' ? 'matched by keywords' : ''].filter(Boolean).join(' · ') || undefined,
             sources: r.sources.map((s) => ({ fileId: s.id, fileName: s.title || s.path, kind: s.kind })),
           },
         ]);
@@ -184,7 +189,9 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
           {index.status === 'indexing' ? (
             <>
               <RefreshCw className="w-3 h-3 mt-px animate-spin text-indigo-400 shrink-0" />
-              <span className="text-neutral-400">{progressText(progress?.stage === 'index' ? progress : { stage: 'index' })}</span>
+              <span className="text-neutral-400">
+                {progressText(indexProgress || { stage: 'index' })} You can ask now: until it's done, documents are matched by keywords.
+              </span>
             </>
           ) : index.status === 'error' ? (
             <>
@@ -245,14 +252,14 @@ export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({ isOpen, on
         {messages.map((msg, i) => (
           <div key={i} className={`flex flex-col gap-1.5 text-xs ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
             <div
-              className={`p-3.5 rounded-2xl whitespace-pre-wrap leading-relaxed max-w-[90%] select-text ${
+              className={`p-3.5 rounded-2xl leading-relaxed max-w-[90%] select-text ${
                 msg.role === 'user'
-                  ? 'bg-blue-600 text-white font-medium rounded-br-none'
+                  ? 'bg-blue-600 text-white font-medium rounded-br-none whitespace-pre-wrap'
                   : 'bg-[#252529] border border-[#333338] text-neutral-200 rounded-bl-none shadow-sm'
               }`}
               data-testid={msg.role === 'assistant' ? 'chat-answer' : undefined}
             >
-              {msg.content}
+              {msg.role === 'assistant' && !msg.failed ? <ChatMarkdown text={msg.content} /> : msg.content}
             </div>
 
             {msg.info && (

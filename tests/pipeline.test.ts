@@ -6,11 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { ProjectIndex, VectorCache, chunkDoc, keywordSearch, MAX_CHUNKS_PER_DOC, type PipelineDoc } from '../electron/ai/finder.ts';
 import { CardCache, WHOLE_DOC_CHARS, condense, excerptCard } from '../electron/ai/condenser.ts';
-import { ProjectChat, buildUserMessage, validateDocs, type OllamaDeps } from '../electron/ai/projectChat.ts';
+import { ProjectChat, buildUserMessage, strongHits, validateDocs, type OllamaDeps } from '../electron/ai/projectChat.ts';
 import { AIGateway, type Providers } from '../electron/ai/gateway.ts';
 import { KeyStore, type Cipher } from '../electron/ai/keyStore.ts';
 import { MAX_TOOL_ROUNDS, claudeConverse } from '../electron/ai/claude.ts';
 import { projectFactsForAI } from '../src/services/projectFacts.ts';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ChatMarkdown } from '../src/components/ai/ChatMarkdown.tsx';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pipe-'));
 const cipher: Cipher = {
@@ -149,6 +152,31 @@ test('buildUserMessage: facts, labelled docs, other docs to read, the question l
   assert.ok(inlined.includes('### docs/long.md (full text, cut)') && !inlined.includes('A card'));
 });
 
+test('strongHits: one clear winner for a specific question, everything for a broad one', () => {
+  const h = (id: string, score: number) => ({ doc: doc(id, ''), score });
+  assert.deepStrictEqual(
+    strongHits([h('arch', 0.814), h('onb', 0.57), h('pay', 0.536)], true).map((x) => x.doc.id),
+    ['arch']
+  );
+  assert.strictEqual(strongHits([h('a', 0.541), h('b', 0.539), h('c', 0.509)], true).length, 3);
+  assert.deepStrictEqual(
+    strongHits([h('a', 10), h('b', 6), h('c', 2)], false).map((x) => x.doc.id),
+    ['a', 'b']
+  );
+  assert.deepStrictEqual(strongHits([], true), []);
+});
+
+test('ChatMarkdown renders headings, lists and code, and never injects HTML from the model', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(ChatMarkdown, { text: '## Title\n\n- **bold** item\n- `code`\n\n1. one\n\n```\nx < y\n```\n\n<img src=x onerror=alert(1)> plain' })
+  );
+  assert.ok(html.includes('<strong'), 'bold');
+  assert.ok(html.includes('<ul') && html.includes('<ol'), 'lists');
+  assert.ok(html.includes('<pre') && html.includes('x &lt; y'), 'code block escaped');
+  assert.ok(!html.includes('<img'), 'raw HTML is shown as text, not rendered');
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt; plain'));
+});
+
 test('validateDocs rejects bad shapes and oversized projects', () => {
   assert.throws(() => validateDocs('x'), /Invalid document list/);
   assert.throws(() => validateDocs([{ id: 1 }]), /Invalid document/);
@@ -239,6 +267,41 @@ test('ProjectChat says how to get matching by meaning when the embedding model i
   const { dir, chat } = chatSetup({ complete: async () => ({ text: '', model: '' }), models: async () => [] }, { installed: async () => ['llama3.2:latest'] });
   try {
     assert.match((await chat.index('P', projectDocs)).reason!, /ollama pull nomic-embed-text/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ProjectChat answers while indexing (by keywords), and reuses one build for repeated index calls', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let embedCalls = 0;
+  const seen: any[] = [];
+  const { dir, gw, chat } = chatSetup(
+    { complete: async (_p, _k, _u, req) => (seen.push(req), { text: 'ok', model: req.model }), models: async () => [] },
+    {
+      embed: async (_u, _m, inputs) => {
+        embedCalls++;
+        await gate;
+        return fakeEmbed([])(inputs);
+      },
+    }
+  );
+  try {
+    await gw.setConfig({ provider: 'ollama', models: { ollama: 'llama3.2:latest' } });
+    const first = chat.index('P', projectDocs);
+    const second = chat.index('P', projectDocs);
+    await new Promise((r) => setTimeout(r, 20));
+    const mid = await chat.ask('P', { projectName: 'Demo', question: 'database query', history: [], facts: '' });
+    assert.strictEqual(mid.mode, 'keywords');
+    assert.match(mid.reason!, /Still indexing/);
+    release();
+    assert.deepStrictEqual(await first, { docs: 3, mode: 'embeddings' });
+    assert.deepStrictEqual(await second, { docs: 3, mode: 'embeddings' });
+    assert.strictEqual(embedCalls, 1, 'the second call joined the first build');
+    const after = await chat.ask('P', { projectName: 'Demo', question: 'database query', history: [], facts: '' });
+    assert.strictEqual(after.mode, 'embeddings');
+    assert.strictEqual(after.reason, undefined);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
