@@ -209,12 +209,14 @@ test('ProjectChat on Claude: finds, cards, lets Claude read a doc, and reports s
       throw new Error('not used');
     },
     models: async () => [],
-    converse: async (_key, req, read) => {
-      seen.push(req);
-      const r = read('docs/db.md');
-      assert.ok(!('error' in r) && r.text.includes('Postgres'));
-      assert.ok('error' in read('../secret.md'));
-      return { text: 'It is Postgres.', model: req.model, read: ['docs/db.md'], usage: { input: 1, output: 1, cacheRead: 900 } };
+    converse: {
+      claude: async (_key, req, read) => {
+        seen.push(req);
+        const r = read('docs/db.md');
+        assert.ok(!('error' in r) && r.text.includes('Postgres'));
+        assert.ok('error' in read('../secret.md'));
+        return { text: 'It is Postgres.', model: req.model, read: ['docs/db.md'], usage: { input: 1, output: 1, cacheRead: 900 } };
+      },
     },
   };
   const { dir, gw, chat } = chatSetup(providers, {});

@@ -66,7 +66,7 @@ declare global {
       aiKeyStatus?: () => Promise<KeyStatus>;
       aiSetKey?: (provider: CloudProvider, key: string) => Promise<KeyStatus>;
       aiClearKey?: (provider: CloudProvider) => Promise<KeyStatus>;
-      aiListModels?: (provider: AIProvider) => Promise<{ models: ModelOption[]; error?: string }>;
+      aiListModels?: (provider: AIProvider) => Promise<{ models: ModelOption[]; error?: string; suggested?: string }>;
       aiMigrateLegacy?: (legacy: unknown) => Promise<{ movedKeys: string[] }>;
       aiPrompt?: (req: {
         task: AITask;

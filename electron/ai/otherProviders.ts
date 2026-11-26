@@ -2,7 +2,7 @@
  * Gemini, OpenAI and Ollama over their own HTTP APIs (main process). Keys travel in headers, never in URLs.
  * Model lists come live from each provider instead of being hardcoded.
  */
-import { systemWithPersona, type CompletionRequest, type CompletionResult, type ModelOption } from './types';
+import { systemWithPersona, type CompletionRequest, type CompletionResult, type ConverseRequest, type DocReader, type ModelOption } from './types';
 import { ollamaContextFor } from './personas';
 
 async function readError(res: Response): Promise<string> {
@@ -34,29 +34,128 @@ async function call(provider: string, url: string, init: RequestInit, timeoutMs 
 
 // --- Gemini -----------------------------------------------------------------------
 
-const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+let GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+/** Tests point Gemini calls at a local stub. */
+export function setGeminiBaseForTests(url: string) {
+  GEMINI = url;
+}
+
+const geminiUsage = (u: any) =>
+  u
+    ? {
+        input: u.promptTokenCount ?? 0,
+        // Thinking tokens are billed as output.
+        output: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+        cacheRead: u.cachedContentTokenCount ?? 0,
+      }
+    : undefined;
+
+/** The answer text of a candidate: text parts only, never thought summaries. */
+const geminiText = (cand: any) =>
+  (cand?.content?.parts || [])
+    .filter((p: any) => typeof p.text === 'string' && !p.thought)
+    .map((p: any) => p.text)
+    .join('');
+
+/** A candidate that carries no usable answer, as a plain sentence. */
+function geminiNoAnswer(data: any, cand: any): Error | null {
+  if (!cand) return new Error(`Gemini returned no answer${data?.promptFeedback?.blockReason ? ` (blocked: ${data.promptFeedback.blockReason})` : ''}.`);
+  const reason = cand.finishReason;
+  if (reason && !['STOP', 'MAX_TOKENS'].includes(reason) && !cand.content?.parts?.length) return new Error(`Gemini stopped without an answer (${reason}).`);
+  return null;
+}
+
+async function geminiGenerate(apiKey: string, model: string, body: unknown): Promise<any> {
+  return call('Gemini', `${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+  });
+}
 
 export async function geminiComplete(apiKey: string, req: CompletionRequest): Promise<CompletionResult> {
   if (!req.model) throw new Error('Pick a Gemini model in AI Settings.');
-  const data = await call('Gemini', `${GEMINI}/models/${encodeURIComponent(req.model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemWithPersona(req) }] },
-      contents: [{ role: 'user', parts: [{ text: req.user }] }],
-      generationConfig: { maxOutputTokens: req.maxTokens ?? 16000 },
-    }),
+  const data = await geminiGenerate(apiKey, req.model, {
+    systemInstruction: { parts: [{ text: systemWithPersona(req) }] },
+    contents: [{ role: 'user', parts: [{ text: req.user }] }],
+    generationConfig: { maxOutputTokens: req.maxTokens ?? 16000 },
   });
   const cand = data?.candidates?.[0];
-  if (!cand) throw new Error(`Gemini returned no answer${data?.promptFeedback?.blockReason ? ` (${data.promptFeedback.blockReason})` : ''}.`);
-  return {
-    text: (cand.content?.parts || []).map((p: any) => p.text || '').join(''),
-    model: req.model,
-    truncated: cand.finishReason === 'MAX_TOKENS',
-    usage: data.usageMetadata
-      ? { input: data.usageMetadata.promptTokenCount ?? 0, output: data.usageMetadata.candidatesTokenCount ?? 0, cacheRead: data.usageMetadata.cachedContentTokenCount ?? 0 }
-      : undefined,
-  };
+  const err = geminiNoAnswer(data, cand);
+  if (err) throw err;
+  return { text: geminiText(cand), model: data?.modelVersion || req.model, truncated: cand.finishReason === 'MAX_TOKENS', usage: geminiUsage(data.usageMetadata) };
+}
+
+export const GEMINI_MAX_TOOL_ROUNDS = 5;
+const GEMINI_READ_DOC_MAX_CHARS = 60000;
+
+const GEMINI_READ_DOC = {
+  name: 'read_doc',
+  description:
+    "Read the full text of one of this project's documents. Use it when a doc card or excerpt is not enough to answer precisely, or to check a detail before stating it. Pass the document path exactly as listed.",
+  parameters: {
+    type: 'object',
+    properties: { path: { type: 'string', description: 'The document path as listed, e.g. docs/architecture.md' } },
+    required: ['path'],
+  },
+};
+
+/**
+ * The thinker on Gemini: like Claude's, it may read project documents in full (read_doc, a function
+ * call) before answering. The model's turns are sent back unchanged so thought signatures survive, and
+ * all results of a turn go back together in one user turn. After GEMINI_MAX_TOOL_ROUNDS, further calls get
+ * an error telling it to answer with what it has, and one more refusal ends the loop.
+ */
+export async function geminiConverse(apiKey: string, req: ConverseRequest, read: DocReader): Promise<CompletionResult> {
+  if (!req.model) throw new Error('Pick a Gemini model in AI Settings.');
+  const contents: any[] = [
+    ...req.history.map((t) => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.text }] })),
+    { role: 'user', parts: [{ text: req.user }] },
+  ];
+  const usage = { input: 0, output: 0, cacheRead: 0 };
+  const readPaths: string[] = [];
+  for (let round = 0; ; round++) {
+    const data = await geminiGenerate(apiKey, req.model, {
+      systemInstruction: { parts: [{ text: systemWithPersona(req) }] },
+      contents,
+      tools: [{ functionDeclarations: [GEMINI_READ_DOC] }],
+      generationConfig: { maxOutputTokens: req.maxTokens ?? 32000 },
+    });
+    const u = geminiUsage(data?.usageMetadata);
+    if (u) {
+      usage.input += u.input;
+      usage.output += u.output;
+      usage.cacheRead += u.cacheRead;
+    }
+    const cand = data?.candidates?.[0];
+    const err = geminiNoAnswer(data, cand);
+    if (err) throw err;
+    const calls = (cand.content?.parts || []).filter((p: any) => p.functionCall);
+    const done = { text: geminiText(cand), model: data?.modelVersion || req.model, truncated: cand.finishReason === 'MAX_TOKENS', usage, read: readPaths };
+    if (!calls.length || round > GEMINI_MAX_TOOL_ROUNDS) return done;
+    contents.push(cand.content);
+    const overLimit = round >= GEMINI_MAX_TOOL_ROUNDS;
+    contents.push({
+      role: 'user',
+      parts: calls.map((p: any) => {
+        const { id, name, args } = p.functionCall;
+        let response: Record<string, string>;
+        if (overLimit) response = { error: 'No more documents can be read for this question. Answer now with what you have.' };
+        else if (name !== 'read_doc') response = { error: `Unknown function ${name}.` };
+        else if (typeof args?.path !== 'string' || !args.path.trim()) response = { error: 'read_doc needs a "path" string.' };
+        else {
+          const r = read(args.path);
+          if ('error' in r) response = { error: r.error };
+          else {
+            if (!readPaths.includes(r.path)) readPaths.push(r.path);
+            const cut = r.text.length > GEMINI_READ_DOC_MAX_CHARS;
+            response = { path: r.path, content: r.text.slice(0, GEMINI_READ_DOC_MAX_CHARS) + (cut ? '\n\n[Cut at 60,000 characters.]' : '') };
+          }
+        }
+        return { functionResponse: { ...(id ? { id } : {}), name, response } };
+      }),
+    });
+  }
 }
 
 export async function geminiModels(apiKey: string): Promise<ModelOption[]> {
@@ -64,6 +163,20 @@ export async function geminiModels(apiKey: string): Promise<ModelOption[]> {
   return (data?.models || [])
     .filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map((m: any) => ({ id: String(m.name).replace(/^models\//, ''), label: m.displayName || m.name }));
+}
+
+/**
+ * A sensible model from Gemini's live list, so Gemini works as soon as a key is added. Google renames and
+ * retires models often (2.5 Flash/Pro reroute on 2026-12-01), so nothing is hardcoded: prefer the newest
+ * stable general-purpose Flash, skipping previews, lite, image, audio, TTS, live and embedding variants.
+ */
+export function suggestGeminiModel(models: ModelOption[]): string | undefined {
+  const general = models.filter((m) => /^gemini-/.test(m.id) && !/(preview|exp|lite|image|tts|audio|live|transcribe|embed|thinking|latest|omni)/i.test(m.id));
+  const version = (id: string) => (id.match(/^gemini-(\d+(?:\.\d+)?)/)?.[1] ? parseFloat(id.match(/^gemini-(\d+(?:\.\d+)?)/)![1]) : 0);
+  const flash = general.filter((m) => /-flash(-\d+)?$/.test(m.id)).sort((a, b) => version(b.id) - version(a.id));
+  if (flash.length) return flash[0].id;
+  // Newer families may not say "flash" (e.g. gemini-4-hydrogen): the newest stable general model.
+  return general.sort((a, b) => version(b.id) - version(a.id))[0]?.id;
 }
 
 // --- OpenAI -----------------------------------------------------------------------
@@ -130,7 +243,11 @@ export async function ollamaComplete(baseUrl: string, req: CompletionRequest): P
       ],
     }),
   }, 600_000).catch((e: Error) => {
-    throw new Error(/Could not reach Ollama/.test(e.message) ? `Ollama is not running at ${baseUrl}. Start it, then try again.` : e.message);
+    if (/Could not reach Ollama/.test(e.message)) throw new Error(`Ollama is not running at ${baseUrl}. Start it, then try again.`);
+    // A model too big for the GPU at this context size fails to start (seen with qwen3-coder:30b on 8 GB).
+    if (/out of memory|out-of-memory/i.test(e.message))
+      throw new Error(`Ollama ran out of memory loading ${req.model} for a prompt this long. Pick a smaller model in AI Settings, or close other GPU apps.`);
+    throw e;
   });
   return {
     text: data?.message?.content || '',
@@ -146,6 +263,19 @@ export async function ollamaModels(baseUrl: string): Promise<ModelOption[]> {
     // Embedding-only models can't answer prompts.
     .filter((m: any) => !Array.isArray(m.capabilities) || m.capabilities.includes('completion'))
     .map((m: any) => ({ id: m.name, label: `${m.name}${m.details?.parameter_size ? ` (${m.details.parameter_size})` : ''}` }));
+}
+
+/**
+ * A default Ollama model for answering, from the installed list: the largest general-purpose model of at
+ * most 9B parameters (fits an 8 GB GPU with room for a long context). Coding and reasoning models are
+ * skipped when a general one exists: they answer document questions worse or far slower.
+ */
+export function suggestOllamaModel(models: ModelOption[]): string | undefined {
+  const size = (m: ModelOption) => parseFloat(m.label.match(/\((\d+(?:\.\d+)?)B\)/i)?.[1] || 'NaN');
+  const special = (id: string) => /(coder|code|r1|reason|embed|vision|-vl|math)/i.test(id);
+  const fits = models.filter((m) => !special(m.id) && size(m) <= 9).sort((a, b) => size(b) - size(a));
+  if (fits.length) return fits[0].id;
+  return models.filter((m) => !Number.isNaN(size(m))).sort((a, b) => size(a) - size(b))[0]?.id || models[0]?.id;
 }
 
 /** Every installed model name (including embedding models), or null when Ollama isn't reachable. */

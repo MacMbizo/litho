@@ -108,6 +108,8 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
     try {
       const r = await window.electronAPI!.aiListModels!(provider);
       setModels({ provider, list: r.models, error: r.error, loading: false });
+      // No model chosen yet: start from the suggested one (still changeable before Save).
+      if (r.suggested) setConfig((c) => (c && !c.models[provider] ? { ...c, models: { ...c.models, [provider]: r.suggested! } } : c));
     } catch (e: any) {
       setModels({ provider, list: [], error: e?.message || String(e), loading: false });
     }

@@ -8,7 +8,7 @@ import path from 'path';
 import type { KeyStore } from './keyStore';
 import { isCloudProvider } from './keyStore';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_FALLBACK_MODELS, claudeComplete, claudeConverse, claudeModels } from './claude';
-import { geminiComplete, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels } from './otherProviders';
+import { geminiComplete, geminiConverse, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels, suggestGeminiModel, suggestOllamaModel } from './otherProviders';
 import { addStarterPersonas, createPersona, isPersonaId, listPersonas, readPersona, type PersonaInfo } from './personas';
 import { AI_TASKS, TASK_EFFORT, type ChatTurn, type ConverseRequest, type DocReader, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
 
@@ -57,12 +57,12 @@ export interface LegacyAIConfig {
 export interface Providers {
   complete: (provider: AIProvider, key: string | undefined, ollamaUrl: string, req: Parameters<typeof claudeComplete>[1]) => Promise<CompletionResult>;
   models: (provider: AIProvider, key: string | undefined, ollamaUrl: string) => Promise<ModelOption[]>;
-  /** Claude's tool-using conversation (the thinker). Optional so older test doubles still fit. */
-  converse?: (key: string, req: ConverseRequest, read: DocReader) => Promise<CompletionResult>;
+  /** Tool-using conversations (the thinker), for the providers that have one. Others get docs inlined. */
+  converse?: Partial<Record<AIProvider, (key: string, req: ConverseRequest, read: DocReader) => Promise<CompletionResult>>>;
 }
 
 export const realProviders: Providers = {
-  converse: claudeConverse,
+  converse: { claude: claudeConverse, gemini: geminiConverse },
   complete: (p, key, url, req) =>
     p === 'claude' ? claudeComplete(key!, req) : p === 'gemini' ? geminiComplete(key!, req) : p === 'openai' ? openaiComplete(key!, req) : ollamaComplete(url, req),
   models: (p, key, url) => (p === 'claude' ? claudeModels(key!) : p === 'gemini' ? geminiModels(key!) : p === 'openai' ? openaiModels(key!) : ollamaModels(url)),
@@ -149,14 +149,16 @@ export class AIGateway {
     return { movedKeys };
   }
 
-  async listModels(provider: AIProvider): Promise<{ models: ModelOption[]; error?: string }> {
+  async listModels(provider: AIProvider): Promise<{ models: ModelOption[]; error?: string; suggested?: string }> {
     const config = await this.getConfig();
     const key = isCloudProvider(provider) ? await this.keys.get(provider) : undefined;
     if (isCloudProvider(provider) && !key) {
       return { models: provider === 'claude' ? CLAUDE_FALLBACK_MODELS : [], error: `Add a ${LABEL[provider]} API key to list its models.` };
     }
     try {
-      return { models: await this.providers.models(provider, key, config.ollamaUrl) };
+      const models = await this.providers.models(provider, key, config.ollamaUrl);
+      const suggested = provider === 'gemini' ? suggestGeminiModel(models) : provider === 'ollama' ? suggestOllamaModel(models) : undefined;
+      return { models, ...(suggested ? { suggested } : {}) };
     } catch (e: any) {
       return { models: provider === 'claude' ? CLAUDE_FALLBACK_MODELS : [], error: e?.message || String(e) };
     }
@@ -190,6 +192,14 @@ export class AIGateway {
       if (!folder) throw new Error('Personas need the desktop app.');
       persona = await readPersona(folder, personaId);
     }
+    // No model chosen yet for Gemini or Ollama: pick a sensible one from the live list and remember it,
+    // so the provider works as soon as it's selected (and a key, for Gemini, is saved).
+    if ((provider === 'gemini' || provider === 'ollama') && !config.models[provider]) {
+      const listed = await this.listModels(provider);
+      if (!listed.suggested) throw new Error(listed.error || `Pick a ${LABEL[provider]} model in AI Settings.`);
+      config.models[provider] = listed.suggested;
+      await this.setConfig(config);
+    }
     return {
       config,
       provider,
@@ -200,8 +210,9 @@ export class AIGateway {
   }
 
   /**
-   * The thinker: Claude converses with a read_doc tool. Other providers have no tool loop here, so the
-   * caller inlines the documents they need (`fallbackUser`) and they get one ordinary request.
+   * The thinker: Claude and Gemini converse with a read_doc tool. OpenAI and Ollama have no tool loop
+   * here (small local models use tools poorly), so the caller inlines the documents they need
+   * (`fallbackUser`) and they get one ordinary request.
    */
   async converse(
     task: AITask,
@@ -212,9 +223,10 @@ export class AIGateway {
     fallbackUser: () => string
   ): Promise<CompletionResult & { provider: AIProvider; persona?: { id: string; name: string } }> {
     const r = await this.resolve(task);
+    const tooled = this.providers.converse?.[r.provider];
     const result =
-      r.provider === 'claude' && this.providers.converse
-        ? await this.providers.converse(r.key!, { ...r.base, system, user, history }, read)
+      tooled && r.key
+        ? await tooled(r.key, { ...r.base, system, user, history }, read)
         : await this.providers.complete(r.provider, r.key, r.config.ollamaUrl, {
             ...r.base,
             system,
