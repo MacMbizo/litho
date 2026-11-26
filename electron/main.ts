@@ -120,6 +120,16 @@ ipcMain.handle('fix:openLog', async (_, runId: string) => {
 const basicsController = new BasicsController(isKnownProjectRoot);
 ipcMain.handle('basics:run', (_, projectRoot: string, action: unknown) => basicsController.run(projectRoot, action));
 ipcMain.handle('basics:ghStatus', () => ghStatus());
+// Basics only (README, git, licence), for remembered projects saved before basics existed: far lighter than a rescan.
+ipcMain.handle('basics:read', async (_, roots: unknown) => {
+  if (!Array.isArray(roots)) return {};
+  const known: string[] = [];
+  for (const r of roots.slice(0, 500)) if (typeof r === 'string' && path.isAbsolute(r) && (await isKnownProjectRoot(r))) known.push(r);
+  const facts = await mapWithConcurrency(known, 4, (r) => readProjectBasics(r).catch(() => null));
+  const out: Record<string, unknown> = {};
+  known.forEach((r, i) => facts[i] && (out[r] = facts[i]));
+  return out;
+});
 ipcMain.handle('basics:openUrl', async (_, url: string) => {
   // Only GitHub repository pages a publish just returned.
   if (typeof url !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/?$/.test(url)) throw new Error('Blocked URL');

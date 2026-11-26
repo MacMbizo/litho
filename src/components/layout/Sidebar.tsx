@@ -35,6 +35,9 @@ import { STATUS_META, passportLabel } from '../project/docPassport';
 import { FileContextMenu, ContextMenuState } from './FileContextMenu';
 import { DocAtlasMark } from '../brand/BrandMarks';
 
+/** Above this many files, tree folders start collapsed. */
+const LARGE_TREE_FILES = 200;
+
 interface SidebarProps {
   files: MarkdownFile[];
   tree?: FileTreeNode | null;
@@ -139,8 +142,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [targetNode, setTargetNode] = useState<FileTreeNode | null>(null);
   const [inputVal, setInputVal] = useState('');
 
-  const toggleFolder = (folderId: string) => {
-    setCollapsedFolders((prev) => ({ ...prev, [folderId]: !prev[folderId] }));
+  // Big projects (thousands of docs) would put every file in the page at once and freeze the window,
+  // so their folders start collapsed, except the ones holding the open file.
+  const startCollapsed = files.length > LARGE_TREE_FILES;
+  const activePath = (activeFileId || '').replace(/\\/g, '/');
+  const isFolderCollapsed = (node: FileTreeNode) => {
+    const explicit = collapsedFolders[node.id];
+    if (explicit !== undefined) return explicit;
+    if (!startCollapsed) return false;
+    const folder = (node.path || '').replace(/\\/g, '/');
+    return !(folder && activePath.startsWith(folder + '/'));
+  };
+  const toggleFolder = (node: FileTreeNode) => {
+    const current = isFolderCollapsed(node);
+    setCollapsedFolders((prev) => ({ ...prev, [node.id]: !current }));
   };
 
   const getDocIcon = (type?: string) => {
@@ -181,14 +196,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Render a recursive tree node
   const renderTreeNode = (node: FileTreeNode, depth: number = 0) => {
     if (node.isFolder) {
-      const isCollapsed = collapsedFolders[node.id];
+      const isCollapsed = isFolderCollapsed(node);
       const hasChildren = node.children && node.children.length > 0;
 
       return (
         <div key={node.id} className="select-none">
           {/* Folder row */}
           <div
-            onClick={() => toggleFolder(node.id)}
+            onClick={() => toggleFolder(node)}
             onContextMenu={(e) => handleContextMenu(e, node)}
             style={{ paddingLeft: `${depth * 12 + 6}px` }}
             className="group flex items-center justify-between py-1 px-2 rounded text-xs text-neutral-400 hover:text-neutral-200 hover:bg-[#262626] cursor-pointer transition"

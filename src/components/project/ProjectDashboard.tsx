@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Folder,
   FileText,
@@ -52,6 +52,11 @@ interface ProjectDashboardProps {
   docActions: DocActionHandlers;
   onOpenPortfolio?: () => void;
 }
+
+/** Document rows rendered per page in the matrix. */
+const MATRIX_PAGE = 100;
+/** Key-document cards shown before "Show all". */
+const KEY_DOCS_SHOWN = 12;
 
 /** Problems first, then authority, so the matrix reads as a to-do list. */
 const MATRIX_SORT: Record<DocTaxonomyStatus, number> = {
@@ -114,6 +119,12 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       .filter((item) => !q || `${item.path} ${item.title} ${item.issues.join(' ')}`.toLowerCase().includes(q))
       .sort((a, b) => MATRIX_SORT[a.status] - MATRIX_SORT[b.status] || a.path.localeCompare(b.path));
   }, [auditReport.inventory, inventoryFilter, matrixQuery]);
+
+  // Thousands of rows at once freeze the window; show a page and grow on demand.
+  const [matrixLimit, setMatrixLimit] = useState(MATRIX_PAGE);
+  const [showAllKeyDocs, setShowAllKeyDocs] = useState(false);
+  useEffect(() => setMatrixLimit(MATRIX_PAGE), [inventoryFilter, matrixQuery, project.rootPath]);
+  useEffect(() => setShowAllKeyDocs(false), [project.rootPath]);
 
   const handleAutoHeal = async () => {
     if (!onAutoHealProject) return;
@@ -596,7 +607,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             </div>
           ) : (
             <div className="rounded-xl bg-[#202020] border border-[#2d2d2d] divide-y divide-[#2a2a2a]">
-              {filteredInventory.map((item) => {
+              {filteredInventory.slice(0, matrixLimit).map((item) => {
                 const meta = STATUS_META[item.status];
                 return (
                   <div
@@ -647,6 +658,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                   </div>
                 );
               })}
+              {filteredInventory.length > matrixLimit && (
+                <button
+                  type="button"
+                  onClick={() => setMatrixLimit((n) => n + MATRIX_PAGE)}
+                  className="w-full px-4 py-2.5 text-xs font-medium text-indigo-300 hover:text-indigo-200 hover:bg-[#252525] transition"
+                >
+                  Show {Math.min(MATRIX_PAGE, filteredInventory.length - matrixLimit)} more ({filteredInventory.length - matrixLimit} not shown)
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -664,7 +684,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {keyDocs.map((doc) => (
+              {(showAllKeyDocs ? keyDocs : keyDocs.slice(0, KEY_DOCS_SHOWN)).map((doc) => (
                 <div
                   key={doc.id}
                   onClick={() => onSelectFile(doc.id)}
@@ -692,6 +712,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 </div>
               ))}
             </div>
+          )}
+          {keyDocs.length > KEY_DOCS_SHOWN && (
+            <button
+              type="button"
+              onClick={() => setShowAllKeyDocs((v) => !v)}
+              className="text-xs font-medium text-indigo-300 hover:text-indigo-200 transition"
+            >
+              {showAllKeyDocs ? 'Show fewer' : `Show all ${keyDocs.length}`}
+            </button>
           )}
         </div>
 

@@ -201,9 +201,29 @@ const AppContent: React.FC = () => {
 
   const activeStackProfile =
     liveStack && liveStack.base === baseStackProfile ? liveStack.profile : baseStackProfile;
+  // The doc audit reads every file (half a second on a 3,000-doc project), so while typing it runs once the
+  // edits pause. Switching project, or adding or removing a file, audits straight away.
+  const [auditInput, setAuditInput] = useState(liveWorkspace);
+  useEffect(() => {
+    if (auditInput === liveWorkspace) return;
+    if (auditInput.rootPath !== liveWorkspace.rootPath || auditInput.files.length !== liveWorkspace.files.length) {
+      setAuditInput(liveWorkspace);
+      return;
+    }
+    const t = setTimeout(() => setAuditInput(liveWorkspace), 500);
+    return () => clearTimeout(t);
+  }, [liveWorkspace, auditInput]);
+  const auditWorkspace =
+    auditInput.rootPath === liveWorkspace.rootPath && auditInput.files.length === liveWorkspace.files.length ? auditInput : liveWorkspace;
+  // The audit only reads local stack facts (frameworks, scripts, port, SDK), which live registry results never
+  // change, so registry updates swap in the new stack profile instead of re-auditing every file.
+  const docAuditReport = useMemo(
+    () => auditProjectDocumentation(auditWorkspace, baseStackProfile),
+    [auditWorkspace, baseStackProfile]
+  );
   const activeAuditReport = useMemo(
-    () => auditProjectDocumentation(liveWorkspace, activeStackProfile),
-    [liveWorkspace, activeStackProfile]
+    () => (activeStackProfile === baseStackProfile ? docAuditReport : { ...docAuditReport, stackProfile: activeStackProfile }),
+    [docAuditReport, activeStackProfile, baseStackProfile]
   );
   const activeDocAudit = useMemo(
     () =>
@@ -224,13 +244,8 @@ const AppContent: React.FC = () => {
         setPortfolioProjects((prev) =>
           prev.map((e) =>
             e.workspace.rootPath === summary.workspace.rootPath
-              ? {
-                  ...e,
-                  // Snapshot entries have no file contents to re-audit; only their stack data changes.
-                  auditReport: e.fromSnapshot
-                    ? { ...e.auditReport, stackProfile: live }
-                    : auditProjectDocumentation(e.workspace, live),
-                }
+              ? // Registry results only change stack data; the doc audit doesn't depend on them, so no re-audit.
+                { ...e, auditReport: { ...e.auditReport, stackProfile: live } }
               : e
           )
         );
@@ -380,6 +395,24 @@ const AppContent: React.FC = () => {
         } else {
           // Registry answers are cached for 24h, so this is cheap and keeps freshness current.
           enrichWithRegistry(restored);
+          // Snapshots saved before project basics existed have no README/git facts: read just those.
+          const missing = restored.filter((p) => !p.workspace.basics).map((p) => p.workspace.rootPath);
+          if (missing.length > 0 && window.electronAPI?.basicsRead) {
+            window.electronAPI
+              .basicsRead(missing)
+              .then((found) =>
+                setPortfolioProjects((prev) =>
+                  prev.map((e) =>
+                    !e.workspace.basics && found[e.workspace.rootPath]
+                      ? { ...e, workspace: { ...e.workspace, basics: found[e.workspace.rootPath] } }
+                      : e
+                  )
+                )
+              )
+              .catch(() => {
+                // the next rescan fills them in
+              });
+          }
         }
       }
       portfolioLoadedRef.current = true;
