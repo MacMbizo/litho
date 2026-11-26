@@ -30,3 +30,10 @@ tests/dist
 # Local brainstorm mockups and browser-test artifacts
 .superpowers/
 .playwright-mcp/
+
+# Added by DocAtlas: keep secrets and build output out of git
+.env
+.env.*
+!.env.example
+*.pem
+*.key
