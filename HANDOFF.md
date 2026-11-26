@@ -1,6 +1,34 @@
 # Handoff: Litho (Markdown studio) / DocAtlas
 
-_Last updated 2026-11-26. `main` (stack fixer and project basics merged) is pushed to https://github.com/MacMbizo/litho. Add licence, the "Fix several at once" queue and the main-process portfolio audit are on `feat/basics-more` (pushed, not yet merged). Feature branches are merged into `main`._
+_Last updated 2026-11-26 (end of session). Everything is merged into `main` and pushed to https://github.com/MacMbizo/litho (head `952d9c7`): stack fixer, project basics, licence, queue, the .gitignore and secrets work, and the AI gateway (slice 1). There's no open feature branch. Feature branches are merged into `main`._
+
+## Start here (next session)
+
+- **Next task:** AI foundation **slice 2**, personas plus prompt caching. Then slice 3 (finder → condenser → thinker). Spec: `docs/superpowers/specs/2026-11-26-ai-foundation-design.md`. Load the `claude-api` skill before writing Claude code.
+- **Waiting on the owner:**
+  - Add a real Claude key in AI & Settings. A real Claude answer has never been tested (no key was used, to avoid spending credit).
+  - Re-pick the Ollama model if they used Ollama before. The legacy `llama3` default isn't installed; `llama3.2` is.
+  - Rotate the DrivingSchool Supabase `service_role` key if it was ever shared or pushed.
+  - Decide whether DrivingSchool's `TEST_CREDENTIALS.md`, `fix-admin-password.js` and `reset-passwords.js` (test-account passwords) go into git.
+  - Choose whether to gitignore `.agents/`.
+  - Decide on packaging (electron-builder) and the "Open with Litho" association.
+- **Changes made outside Litho this session:**
+  - **DrivingSchool (not a git repo):**
+    - 7 scripts (`create-test-users.js`, `delete-and-recreate-users.js`, `fix-admin-password.js`, `fix-auth-final.js`, `reset-passwords.js`, `test-auth.js`, `test-connection.js`) now read `SUPABASE_SERVICE_ROLE_KEY` from `.env` instead of a hardcoded key.
+    - `.env.example` gained that variable's name, with no value.
+    - The originals are backed up in the session scratchpad (`…/scratchpad/ds-backup`). They still contain the key, so delete them once the owner is happy.
+    - `.env` also has `VITE_WHATSAPP_ACCESS_TOKEN` and `VITE_PAYNOW_INTEGRATION_KEY`. They're unused in `src` and absent from `dist`, but `VITE_` values get bundled into the site if they're ever used.
+  - **Fix .gitignore, committed locally only (not pushed), each commit `.gitignore` only:**
+    - agent-skills (`antigravity-skills/`): `0f8870c`
+    - aves: `0b38bcc`
+    - instruction-scanner: `23515e5`
+    - paperRock: `935874c`
+    - sightline: `b8d5d40`
+  - **Skipped on purpose:**
+    - **wellness:** 41 staged files, including a staged `.gitignore`, so someone's work is in progress.
+    - **F4:** tracks `.vercel/project.json` on purpose. DocAtlas now leaves tracked folders alone.
+- **E2E scripts:** they live only in the session scratchpad and aren't in the repo. They used playwright-core from the npx cache with `--user-data-dir`. The suites were `e2e-basics` (`C:\Prj`, read-only, hashes every `.git`), `e2e-fixes`, `e2e-queue`, `e2e-gitignore` and `e2e-ai`, all on throwaway fixtures. Worth adding to the repo as a `tests/e2e/` folder.
+- **Gotcha:** in this environment Git Bash heredocs collapse `\\` to `\`. Write code containing backslashes with the Write/Edit tools, never `cat <<EOF`.
 
 ## Name and brand (2026-11-14)
 
