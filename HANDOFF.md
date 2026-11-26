@@ -317,7 +317,13 @@ The owner's standard: every project has a README that says what it is, a git rep
 ## Providers and local models (2026-11-26, branch `feat/provision-ollama-gemini`)
 
 - **Machine:** RTX 4060 8 GB VRAM, 31 GB RAM, Ollama 0.40.18. Local models are shared with the owner's other apps (Cairn etc.): keep good ones, delete only poor downloads.
-- **Installed Ollama models:** `qwen3.5:4b` (new, the default thinker and card writer), `llama3.2` (fallback card writer), `nomic-embed-text` (finder), `mxbai-embed-large`, plus the owner's older `qwen3-coder:30b`, Qwen2.5-Coder-14B and DeepSeek-R1-32B (left alone). `qwen3:8b` was downloaded, benchmarked and deleted.
+- **Installed Ollama models (the roster for all the owner's apps):**
+  - `qwen3.5:4b` (3.3 GB, 100% GPU, 58 tok/s): Litho's default thinker and card writer. Document Q&A 5/6, tools 3/3, reasoning 4/4 with thinking; weak at writing code (6/17).
+  - `ornith:9b` (5.6 GB, 100% GPU at 16k, 44 tok/s): the coding, agent and reasoning model. Code 13/17, tools 3/3, reasoning 7/7 (fastest of all), doc Q&A 5/6 but slower in Litho (model swaps with the card writer). Use it in other apps for code and tool use.
+  - `llama3.2` (fallback card writer), `nomic-embed-text` (finder), `mxbai-embed-large`, and the owner's Qwen2.5-Coder-14B (code 16/17 but 8 tok/s, half on CPU, no working tool calls; kept, owner's call).
+  - **Deleted after testing:** `qwen3-coder:30b` (only loads at a 4k context; out of GPU memory at 16k), DeepSeek-R1-32B (won't load at all), `qwen3:8b` (invented a fact, slow), `mimo-v2.6:9b` (worse than ornith on every count, 16% on CPU), `qwen3.5:9b` (buggy code, one reasoning problem ran past 10 minutes), `gpt-oss:20b` (14 GB mostly in system RAM; loading it drove the PC critically low on memory with the owner's apps open, so it was never benchmarked).
+  - **Role benchmark** (`scratchpad/bench/roles.cjs`, not in the repo): at 16k context, 3 coding tasks run against real test cases in `node:vm`, 3 tool-calling cases via Ollama `tools`, 7 reasoning problems with known answers (thinking on).
+  - **Still open:** a second, smaller reasoning specialist was asked for; candidates not yet tested are `nemotron-3-nano:4b` (2.8 GB) and `lfm2.5:8b` (MoE, ~1B active, 5.2 GB). ornith already covers reasoning well.
 - **Benchmark** (real pipeline over Litho's own docs, 3 questions with known answers; 5/6 is the practical max because the price isn't in the inlined text):
   - `qwen3.5:4b`: 5/6, 31 s total, honest about missing facts. **Chosen.** With thinking: 5/6, 44 s.
   - `qwen3:8b`: 5/6, 70 s, **invented a price** with thinking off; with thinking 5/6, 101 s. Deleted.
