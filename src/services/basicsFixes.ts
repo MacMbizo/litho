@@ -8,7 +8,29 @@ export type BasicsAction =
   | { kind: 'add-description'; readmePath: string; expected: string; description: string }
   | { kind: 'start-git' }
   | { kind: 'publish-github'; repoPath: string; name: string; visibility: 'private' | 'public'; description?: string }
-  | { kind: 'push'; repoPath: string };
+  | { kind: 'push'; repoPath: string }
+  | { kind: 'add-licence'; repoPath: string; licence: LicenceId; holder: string; year: number };
+
+/** Licences DocAtlas can add. AGPL-3.0 is the owner's default; Proprietary suits client work. */
+export const LICENCES = [
+  { id: 'AGPL-3.0', github: 'agpl-3.0', label: 'AGPL-3.0', note: 'Open source; changes must stay open, including when run as a web service.' },
+  { id: 'GPL-3.0', github: 'gpl-3.0', label: 'GPL-3.0', note: 'Open source; changes must stay open when distributed.' },
+  { id: 'MIT', github: 'mit', label: 'MIT', note: 'Permissive: anyone may use it, even in closed products.' },
+  { id: 'Apache-2.0', github: 'apache-2.0', label: 'Apache-2.0', note: 'Permissive, with an explicit patent grant.' },
+  { id: 'MPL-2.0', github: 'mpl-2.0', label: 'MPL-2.0', note: 'Changed files stay open; the rest can be closed.' },
+  { id: 'Proprietary', github: null, label: 'Proprietary', note: 'All rights reserved: for client or private work.' },
+] as const;
+export type LicenceId = (typeof LICENCES)[number]['id'];
+
+/** The text written to LICENSE, from GitHub's official template (null for Proprietary). */
+export function licenceText(id: LicenceId, template: string | null, holder: string, year: number): string {
+  if (id === 'Proprietary' || template === null) {
+    return `Copyright (c) ${year} ${holder}. All rights reserved.\n\nThis software and its source code are proprietary and confidential. No part of it may be copied, modified, distributed or used without the prior written permission of the copyright holder.\n`;
+  }
+  // MIT (and BSD-style) templates carry [year] and [fullname]; the GPL family has no fill-ins in its text.
+  const text = template.replace(/\[year\]/g, String(year)).replace(/\[fullname\]/g, holder);
+  return text.endsWith('\n') ? text : text + '\n';
+}
 
 export interface ScanFinding {
   path: string;
@@ -64,6 +86,15 @@ export function validateAction(raw: unknown): BasicsAction {
     }
     case 'push':
       return { kind: 'push', repoPath: relPath(a.repoPath ?? '', 'repo path') };
+    case 'add-licence': {
+      const licence = LICENCES.find((l) => l.id === a.licence)?.id;
+      if (!licence) throw new Error('Unknown licence');
+      const holder = oneLine(str(a.holder, 200, 'copyright holder'));
+      if (!holder) throw new Error('Who holds the copyright?');
+      const year = Number(a.year);
+      if (!Number.isInteger(year) || year < 1970 || year > 2200) throw new Error('Invalid year');
+      return { kind: 'add-licence', repoPath: relPath(a.repoPath ?? '', 'repo path'), licence, holder, year };
+    }
     default:
       throw new Error('Unknown action');
   }

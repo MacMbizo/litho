@@ -4,7 +4,7 @@ import fs from 'fs';
 import { IGNORED_DIRS, pathExists, readStackConfigFiles } from './stackFiles';
 import { FixController } from './fixRunner';
 import { readProjectBasics } from './projectBasics';
-import { BasicsController, ghStatus } from './basicsFixer';
+import { BasicsController, ghStatus, gitUserName } from './basicsFixer';
 import { summarizeScan, type ProjectSummaryPayload } from '../src/services/projectSummary';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
@@ -121,6 +121,7 @@ ipcMain.handle('fix:openLog', async (_, runId: string) => {
 const basicsController = new BasicsController(isKnownProjectRoot);
 ipcMain.handle('basics:run', (_, projectRoot: string, action: unknown) => basicsController.run(projectRoot, action));
 ipcMain.handle('basics:ghStatus', () => ghStatus());
+ipcMain.handle('basics:gitUser', () => gitUserName());
 // Basics only (README, git, licence), for remembered projects saved before basics existed: far lighter than a rescan.
 ipcMain.handle('basics:read', async (_, roots: unknown) => {
   if (!Array.isArray(roots)) return {};

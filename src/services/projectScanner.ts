@@ -51,6 +51,7 @@ declare global {
       onFixEvent?: (callback: (e: FixEvent) => void) => () => void;
       basicsRun?: (projectRoot: string, action: BasicsAction) => Promise<BasicsActionResult>;
       basicsGhStatus?: () => Promise<{ installed: boolean; account?: string }>;
+      basicsGitUser?: () => Promise<string>;
       basicsRead?: (roots: string[]) => Promise<Record<string, ProjectBasicsFacts>>;
       basicsOpenUrl?: (url: string) => Promise<boolean>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;

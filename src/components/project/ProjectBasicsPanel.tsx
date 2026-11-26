@@ -59,6 +59,8 @@ function fixFor(c: BasicsCheck, facts: ProjectBasicsFacts): PlannedFix | null {
   const readable = facts.repos.filter((r) => !r.error);
   if (c.id === 'readme') return c.status === 'fail' ? { kind: 'create-readme', label: 'Create README' } : c.status === 'warn' ? { kind: 'add-description', label: 'Add description' } : null;
   if (c.id === 'git' && c.status === 'fail') return { kind: 'start-git', label: 'Start git' };
+  // The licence belongs with the code: in the repo's folder when the repo lives in a subfolder.
+  if (c.id === 'licence' && c.status !== 'pass') return { kind: 'add-licence', label: 'Add licence', repo: readable.find((r) => r.path === '') || readable[0] };
   if (c.id === 'remote' && c.status === 'fail') {
     const repo = readable.find((r) => r.remotes.length === 0 && r.hasCommits);
     return repo ? { kind: 'publish-github', label: 'Publish to GitHub', repo } : null;

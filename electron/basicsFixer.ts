@@ -9,8 +9,10 @@ import path from 'path';
 import {
   MAX_FILE_BYTES,
   MAX_FILES,
+  LICENCES,
   gitignoreFor,
   insertDescription,
+  licenceText,
   looksBinary,
   riskyFileName,
   secretInText,
@@ -223,6 +225,15 @@ async function repoDir(projectRoot: string, repoPath: string): Promise<string> {
   return inside(projectRoot, repoPath || '.');
 }
 
+/** The name in git's global config, used as the default copyright holder. */
+export async function gitUserName(): Promise<string> {
+  try {
+    return (await git(process.cwd(), ['config', '--global', '--get', 'user.name'])).trim();
+  } catch {
+    return '';
+  }
+}
+
 /** Whether the GitHub CLI is installed and signed in (gh prints this to stdout or stderr by version). */
 export function ghStatus(): Promise<{ installed: boolean; account?: string }> {
   return new Promise((resolve) => {
@@ -291,10 +302,48 @@ async function push(projectRoot: string, a: Extract<BasicsAction, { kind: 'push'
   }
 }
 
+/** Official licence text from GitHub's licence API (no auth, nothing about the project is sent). */
+export async function fetchGithubLicence(key: string): Promise<string> {
+  const res = await fetch(`https://api.github.com/licenses/${encodeURIComponent(key)}`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Litho' },
+  });
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  const body = (await res.json())?.body;
+  if (typeof body !== 'string' || body.length < 200) throw new Error('Unexpected licence text');
+  return body;
+}
+
+const LICENCE_FILE_RE = /^(licen[cs]e|copying|unlicense)(\.(md|txt))?$/i;
+
+async function addLicence(
+  projectRoot: string,
+  a: Extract<BasicsAction, { kind: 'add-licence' }>,
+  getTemplate: (key: string) => Promise<string>
+): Promise<BasicsActionResult> {
+  const dir = a.repoPath ? await repoDir(projectRoot, a.repoPath) : await fs.promises.realpath(projectRoot);
+  const existing = (await fs.promises.readdir(dir)).find((n) => LICENCE_FILE_RE.test(n));
+  if (existing) return { ok: false, message: `${existing} already exists; DocAtlas never overwrites it.` };
+  const meta = LICENCES.find((l) => l.id === a.licence)!;
+  let template: string | null = null;
+  if (meta.github) {
+    try {
+      template = await getTemplate(meta.github);
+    } catch (e: any) {
+      return { ok: false, message: `Couldn't download the ${meta.label} text from GitHub (${e?.message || 'offline?'}). Nothing was written.` };
+    }
+  }
+  const rel = a.repoPath ? `${a.repoPath}/LICENSE` : 'LICENSE';
+  await fs.promises.writeFile(path.join(dir, 'LICENSE'), licenceText(a.licence, template, a.holder, a.year), { encoding: 'utf-8', flag: 'wx' });
+  return { ok: true, message: `${meta.label} licence added (${rel}).`, wrote: [rel] };
+}
+
 /** One basics action at a time across the app; the renderer shows the running state from its own call. */
 export class BasicsController {
   private busy = false;
-  constructor(private isKnownRoot: (p: string) => Promise<boolean>) {}
+  constructor(
+    private isKnownRoot: (p: string) => Promise<boolean>,
+    private getLicenceTemplate: (key: string) => Promise<string> = fetchGithubLicence
+  ) {}
 
   async run(projectRoot: string, rawAction: unknown): Promise<BasicsActionResult> {
     if (typeof projectRoot !== 'string' || !path.isAbsolute(projectRoot)) throw new Error('Invalid project');
@@ -314,6 +363,8 @@ export class BasicsController {
           return await publishGithub(projectRoot, action);
         case 'push':
           return await push(projectRoot, action);
+        case 'add-licence':
+          return await addLicence(projectRoot, action, this.getLicenceTemplate);
       }
     } catch (e: any) {
       return { ok: false, message: e?.message || String(e) };

@@ -8,6 +8,7 @@ import {
   draftReadme,
   gitignoreFor,
   insertDescription,
+  licenceText,
   riskyFileName,
   secretInText,
   suggestRepoName,
@@ -92,6 +93,20 @@ test('riskyFileName and secretInText', () => {
   assert.strictEqual(secretInText('just code'), null);
 });
 
+test('licenceText fills MIT placeholders, writes Proprietary itself, and validateAction checks licences', () => {
+  assert.strictEqual(licenceText('MIT', 'MIT License\n\nCopyright (c) [year] [fullname]\n', 'Ada', 2026), 'MIT License\n\nCopyright (c) 2026 Ada\n');
+  assert.match(licenceText('Proprietary', null, 'Ada', 2026), /^Copyright \(c\) 2026 Ada\. All rights reserved\./);
+  assert.deepStrictEqual(validateAction({ kind: 'add-licence', repoPath: '', licence: 'AGPL-3.0', holder: ' Ada ', year: '2026' }), {
+    kind: 'add-licence',
+    repoPath: '',
+    licence: 'AGPL-3.0',
+    holder: 'Ada',
+    year: 2026,
+  });
+  assert.throws(() => validateAction({ kind: 'add-licence', repoPath: '', licence: 'WTFPL', holder: 'A', year: 2026 }), /Unknown licence/);
+  assert.throws(() => validateAction({ kind: 'add-licence', repoPath: '', licence: 'MIT', holder: '  ', year: 2026 }), /copyright/);
+});
+
 // --- real folders -------------------------------------------------------------------
 
 function gitAvailable(): boolean {
@@ -144,6 +159,40 @@ test('create README never overwrites; add description is compare-and-write; unkn
     const ok = await c.run(dir, { kind: 'add-description', readmePath: 'README.md', expected: '# A\n\nAn app.\n', description: 'Tracks things.' });
     assert.ok(ok.ok, ok.message);
     assert.strictEqual(fs.readFileSync(path.join(dir, 'README.md'), 'utf-8'), '# A\n\nTracks things.\n\nAn app.\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('add licence: writes LICENSE from the template, never overwrites, reports offline', async () => {
+  const dir = tmp();
+  try {
+    const asked: string[] = [];
+    const c = new BasicsController(known([dir]), async (key) => {
+      asked.push(key);
+      return 'GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3, 19 November 2007\n' + 'x'.repeat(300);
+    });
+    const r = await c.run(dir, { kind: 'add-licence', repoPath: '', licence: 'AGPL-3.0', holder: 'Ada', year: 2026 });
+    assert.ok(r.ok, r.message);
+    assert.deepStrictEqual(asked, ['agpl-3.0']);
+    assert.match(fs.readFileSync(path.join(dir, 'LICENSE'), 'utf-8'), /^GNU AFFERO/);
+    const again = await c.run(dir, { kind: 'add-licence', repoPath: '', licence: 'MIT', holder: 'Ada', year: 2026 });
+    assert.match(again.message, /LICENSE already exists/);
+
+    const dir2 = tmp();
+    try {
+      const offline = new BasicsController(known([dir2]), async () => {
+        throw new Error('getaddrinfo ENOTFOUND');
+      });
+      const o = await offline.run(dir2, { kind: 'add-licence', repoPath: '', licence: 'MIT', holder: 'Ada', year: 2026 });
+      assert.strictEqual(o.ok, false);
+      assert.match(o.message, /Nothing was written/);
+      assert.ok(!fs.existsSync(path.join(dir2, 'LICENSE')));
+      const p = await offline.run(dir2, { kind: 'add-licence', repoPath: '', licence: 'Proprietary', holder: 'MCC', year: 2026 });
+      assert.ok(p.ok, 'Proprietary needs no download');
+    } finally {
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

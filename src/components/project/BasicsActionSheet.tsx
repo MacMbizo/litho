@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CircleCheck, CircleX, ExternalLink, Github, Loader2, Lock, Globe, ShieldCheck, X } from 'lucide-react';
 import type { BasicsActionResult } from '../../services/basicsFixes';
-import { draftReadme, suggestRepoName } from '../../services/basicsFixes';
+import { LICENCES, draftReadme, suggestRepoName, type LicenceId } from '../../services/basicsFixes';
 import type { ProjectBasicsFacts, RepoFacts } from '../../services/projectBasics';
 
-export type BasicsSheetKind = 'create-readme' | 'add-description' | 'start-git' | 'publish-github' | 'push';
+export type BasicsSheetKind = 'create-readme' | 'add-description' | 'start-git' | 'publish-github' | 'push' | 'add-licence';
 
 export interface BasicsActionContext {
   projectRoot: string;
@@ -31,6 +31,7 @@ const TITLES: Record<BasicsSheetKind, string> = {
   'start-git': 'Start git',
   'publish-github': 'Publish to GitHub',
   push: 'Push',
+  'add-licence': 'Add a licence',
 };
 
 const joinPath = (root: string, rel: string) => (rel ? `${root.replace(/[\\/]+$/, '')}\\${rel.replace(/\//g, '\\')}` : root);
@@ -46,6 +47,9 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
   const [repoName, setRepoName] = useState(suggestRepoName(repo?.path ? repo.path.split('/').pop()! : ctx.projectName));
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const [gh, setGh] = useState<{ installed: boolean; account?: string } | null>(null);
+  const [licenceId, setLicenceId] = useState<LicenceId>('AGPL-3.0');
+  const [holder, setHolder] = useState('');
+  const [year, setYear] = useState(String(new Date().getFullYear()));
 
   const licence = ctx.facts.licence?.kind;
   const generated = useMemo(
@@ -69,6 +73,10 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
       .then(setReadmeText)
       .catch((e) => setReadmeError(e?.message || 'Could not read the README'));
   }, [kind, ctx.projectRoot, ctx.facts.readme]);
+
+  useEffect(() => {
+    if (kind === 'add-licence') window.electronAPI?.basicsGitUser?.().then((n) => setHolder((h) => h || n)).catch(() => {});
+  }, [kind]);
 
   useEffect(() => {
     if (kind === 'publish-github') window.electronAPI?.basicsGhStatus?.().then(setGh).catch(() => setGh({ installed: false }));
@@ -98,7 +106,9 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
               ? { kind }
               : kind === 'publish-github'
                 ? { kind, repoPath: repo?.path ?? '', name: repoName.trim(), visibility, description: description.trim() || undefined }
-                : { kind, repoPath: repo?.path ?? '' };
+                : kind === 'add-licence'
+                  ? { kind, repoPath: repo?.path ?? '', licence: licenceId, holder: holder.trim(), year: Number(year) }
+                  : { kind, repoPath: repo?.path ?? '' };
       const res = await window.electronAPI.basicsRun(ctx.projectRoot, action as any);
       setResult(res);
       // The checklist refreshes in the background; the sheet is done as soon as the result is in.
@@ -119,7 +129,9 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
         ? description.trim().length > 0 && readmeText !== null
         : kind === 'publish-github'
           ? /^[A-Za-z0-9._-]{1,100}$/.test(repoName.trim()) && Boolean(gh?.account)
-          : true);
+          : kind === 'add-licence'
+            ? holder.trim().length > 0 && /^\d{4}$/.test(year)
+            : true);
 
   const buttonLabel =
     kind === 'create-readme'
@@ -130,7 +142,9 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
           ? 'Start git'
           : kind === 'publish-github'
             ? `Publish ${visibility}`
-            : 'Push';
+            : kind === 'add-licence'
+              ? `Add ${licenceId} licence`
+              : 'Push';
 
   const input = 'w-full px-3 py-2 rounded-lg bg-[#161616] border border-[#333] text-xs text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:border-indigo-500';
   const where = repo?.path ? `${repo.path}/` : 'the project folder';
@@ -246,6 +260,39 @@ export const BasicsActionSheet: React.FC<Props> = ({ kind, ctx, repo, suggestedD
               </label>
               <p className="text-neutral-500">
                 Creates the repository, adds it as <span className="font-mono">origin</span> for {where} and pushes the committed code. Committed files are checked for keys and env files first.
+              </p>
+            </>
+          )}
+
+          {kind === 'add-licence' && (
+            <>
+              <div className="space-y-1.5" role="radiogroup" aria-label="Licence">
+                {LICENCES.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={licenceId === l.id}
+                    onClick={() => setLicenceId(l.id)}
+                    className={`w-full text-left px-3 py-2 rounded-lg border transition flex items-baseline gap-2 ${licenceId === l.id ? 'border-indigo-500/60 bg-indigo-500/10' : 'border-[#333] bg-[#171717] hover:border-[#444]'}`}
+                  >
+                    <span className="font-semibold text-neutral-100 w-24 shrink-0">{l.label}</span>
+                    <span className="text-[11px] text-neutral-400">{l.note}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-[1fr_90px] gap-2">
+                <label className="block space-y-1.5">
+                  <span className="font-semibold text-neutral-200">Copyright holder</span>
+                  <input className={input} value={holder} onChange={(e) => setHolder(e.target.value)} placeholder="Your name or organisation" />
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="font-semibold text-neutral-200">Year</span>
+                  <input className={`${input} font-mono`} value={year} onChange={(e) => setYear(e.target.value)} inputMode="numeric" />
+                </label>
+              </div>
+              <p className="text-neutral-500">
+                Writes LICENSE in {where}{licenceId !== 'Proprietary' ? ", using GitHub's official licence text" : ''}. An existing licence file is never overwritten.
               </p>
             </>
           )}
