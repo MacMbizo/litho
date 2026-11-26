@@ -1,6 +1,6 @@
 # Handoff: Litho (Markdown studio) / DocAtlas
 
-_Last updated 2026-11-26. `main` (with the stack fixer merged) is pushed to https://github.com/MacMbizo/litho. Project basics is on branch `feat/project-basics` (pushed, not yet merged). Feature branches are merged into `main`._
+_Last updated 2026-11-26. `main` (stack fixer and project basics merged) is pushed to https://github.com/MacMbizo/litho. Add licence, the "Fix several at once" queue and the main-process portfolio audit are on `feat/basics-more` (pushed, not yet merged). Feature branches are merged into `main`._
 
 ## Name and brand (2026-11-14)
 
@@ -37,7 +37,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (106) | `npm test` |
+| Unit tests (110) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -233,10 +233,34 @@ The owner's standard: every project has a README that says what it is, a git rep
   - **Local only:** C1, F4, instruction-scanner, paperRock.
   - **Template README:** paperRock, pr.
   - **Unpushed:** mccShepherd (25), pigeon (49).
-- **Ideas not built:**
-  - A "Licence" fix (AGPL-3.0 is the owner's default).
-  - A bulk "Fix basics for all" queue.
-  - An AI-written description, once project 2 exists.
+- **Add licence (built later the same day):**
+  - Choices: AGPL-3.0 (the default), GPL-3.0, MIT, Apache-2.0, MPL-2.0, or Proprietary for client work.
+  - The text is GitHub's official template from `api.github.com/licenses/<key>`. The request is anonymous and sends only the licence key. `[year]` and `[fullname]` are filled in.
+  - Written into the repo's folder, including nested repos, with `wx`. Offline means nothing is written.
+  - The holder defaults to git's global `user.name` (IPC `basics:gitUser`).
+- **Fix several at once:**
+  - **Code:** `src/services/basicsQueue.ts` (pure, tested) and `BasicsQueueSheet.tsx`. Opened from the "Missing basics" filter.
+  - **Order:** README, licence, start git, publish, push, so a new README and LICENSE go into the first commit.
+  - **Defaults:** README and Start git start ticked; licence, publish and push are opt-in.
+  - **Rules:** publishing is always private here and is skipped if Start git failed. README is offered only when a manifest description exists.
+  - **Existing repos:** new files in a repo that already exists are left for the owner to commit.
+- **Portfolio audit moved to the main process:**
+  - `src/services/projectSummary.ts`: `fs:scanPortfolioRoot` and `fs:scanProjectSummary` return summaries with no file contents. Entries are `fromSnapshot: true`, so opening a project reads it from disk.
+  - A full rescan no longer freezes the window; it was 1.1 s. It takes about 8 s, with the work in the main process.
+  - The sidebar's Portfolio tab lists docs from the audit inventory, capped at 60 per project.
+- **Large projects:**
+  - Trees with more than 200 files start collapsed.
+  - The doc matrix pages 100 rows at a time; key docs show 12.
+  - The audit is debounced 500 ms while typing and no longer reruns on registry results.
+  - agent-skills (3,288 docs) went from about 195k DOM nodes to 4.3k.
+- **Verified:**
+  - 110 unit tests.
+  - E2E suites: basics 19/19, fixes 17/17, queue 15/15. The queue suite covers a real MIT text download, a run with a refusal, push, and the README and LICENSE in the first commit.
+  - A copy of the owner's real userData: backfill, rescan and opening agent-skills, all with no long tasks.
+- **Not verified:**
+  - A real `gh repo create`, single or queued.
+  - Light theme.
+- **Idea not built:** an AI-written description, once project 2 exists.
 
 ## Next: AI foundation (project 2), then design suite (project 3)
 
