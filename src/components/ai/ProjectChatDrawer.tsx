@@ -11,7 +11,7 @@ import {
   ExternalLink 
 } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
-import { AIService } from '../../services/aiService';
+import { AIService, describeRun } from '../../services/aiService';
 
 interface ProjectChatDrawerProps {
   isOpen: boolean;
@@ -25,6 +25,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   sources?: { fileId: string; fileName: string; snippet: string }[];
+  /** Persona and cache use for an answer (describeRun). */
+  info?: string;
 }
 
 export const ProjectChatDrawer: React.FC<ProjectChatDrawerProps> = ({
@@ -102,13 +104,14 @@ Answer the user's inquiry clearly, factually, and concisely using the provided c
 Always format your response using clean Markdown.`;
 
       const promptPayload = `Context Documents from Vault:\n\n${contextBlocks}\n\nUser Question: ${questionText}`;
-      const answer = await AIService.prompt(systemPrompt, promptPayload);
+      const run = await AIService.complete('chat', systemPrompt, promptPayload);
 
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: answer,
+          content: run.text,
+          info: describeRun(run) || undefined,
           sources: sources.length > 0 ? sources : undefined,
         },
       ]);
@@ -201,6 +204,12 @@ Always format your response using clean Markdown.`;
             >
               {msg.content}
             </div>
+
+            {msg.info && (
+              <span className="text-[10px] text-neutral-500 pl-1" data-testid="ai-run-info">
+                {msg.info}
+              </span>
+            )}
 
             {/* Sources / Citations */}
             {msg.sources && msg.sources.length > 0 && (

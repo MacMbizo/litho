@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   aiListModels: (provider: string) => ipcRenderer.invoke('ai:listModels', provider),
   aiMigrateLegacy: (legacy: unknown) => ipcRenderer.invoke('ai:migrateLegacy', legacy),
   aiPrompt: (req: unknown) => ipcRenderer.invoke('ai:prompt', req),
+  aiListPersonas: () => ipcRenderer.invoke('ai:listPersonas'),
+  aiCreatePersona: (name: string) => ipcRenderer.invoke('ai:createPersona', name),
+  aiOpenPersonasFolder: () => ipcRenderer.invoke('ai:openPersonasFolder'),
   onFsChanged: (callback: (data: any) => void) => {
     const listener = (_: unknown, data: any) => callback(data);
     ipcRenderer.on('fs:changed', listener);

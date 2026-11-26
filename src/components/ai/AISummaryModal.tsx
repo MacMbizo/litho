@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Sparkles, Check, Copy, Tag, RefreshCw, X, ArrowRight, Layers, Bot, Wrench } from 'lucide-react';
 import { MarkdownFile } from '../../types/document';
-import { AIService, CategorizationResult } from '../../services/aiService';
+import { AIService, CategorizationResult, describeRun } from '../../services/aiService';
 
 interface AISummaryModalProps {
   isOpen: boolean;
@@ -22,6 +22,7 @@ export const AISummaryModal: React.FC<AISummaryModalProps> = ({
   const [summaryMode, setSummaryMode] = useState<'bullet' | 'executive' | 'actions'>('executive');
   const [loading, setLoading] = useState(false);
   const [summaryResult, setSummaryResult] = useState('');
+  const [summaryInfo, setSummaryInfo] = useState('');
   const [categoryResult, setCategoryResult] = useState<CategorizationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -32,8 +33,9 @@ export const AISummaryModal: React.FC<AISummaryModalProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await AIService.summarize(file.body, summaryMode);
-      setSummaryResult(res);
+      const run = await AIService.summarizeRun(file.body, summaryMode);
+      setSummaryResult(run.text);
+      setSummaryInfo(describeRun(run));
     } catch (err: any) {
       setError(err.message || 'Failed to generate summary');
     } finally {
@@ -186,6 +188,11 @@ export const AISummaryModal: React.FC<AISummaryModalProps> = ({
                     {summaryResult}
                   </div>
                   <div className="flex items-center justify-end gap-2">
+                    {summaryInfo && (
+                      <span className="mr-auto text-[10px] text-neutral-500 truncate" data-testid="ai-run-info" title={summaryInfo}>
+                        {summaryInfo}
+                      </span>
+                    )}
                     <button
                       onClick={handleCopy}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#333] hover:bg-[#282828] text-neutral-300 text-xs transition"

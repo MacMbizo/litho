@@ -2,7 +2,8 @@
  * Gemini, OpenAI and Ollama over their own HTTP APIs (main process). Keys travel in headers, never in URLs.
  * Model lists come live from each provider instead of being hardcoded.
  */
-import type { CompletionRequest, CompletionResult, ModelOption } from './types';
+import { systemWithPersona, type CompletionRequest, type CompletionResult, type ModelOption } from './types';
+import { ollamaContextFor } from './personas';
 
 async function readError(res: Response): Promise<string> {
   try {
@@ -41,7 +42,7 @@ export async function geminiComplete(apiKey: string, req: CompletionRequest): Pr
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: req.system }] },
+      systemInstruction: { parts: [{ text: systemWithPersona(req) }] },
       contents: [{ role: 'user', parts: [{ text: req.user }] }],
       generationConfig: { maxOutputTokens: req.maxTokens ?? 16000 },
     }),
@@ -52,7 +53,9 @@ export async function geminiComplete(apiKey: string, req: CompletionRequest): Pr
     text: (cand.content?.parts || []).map((p: any) => p.text || '').join(''),
     model: req.model,
     truncated: cand.finishReason === 'MAX_TOKENS',
-    usage: data.usageMetadata ? { input: data.usageMetadata.promptTokenCount ?? 0, output: data.usageMetadata.candidatesTokenCount ?? 0 } : undefined,
+    usage: data.usageMetadata
+      ? { input: data.usageMetadata.promptTokenCount ?? 0, output: data.usageMetadata.candidatesTokenCount ?? 0, cacheRead: data.usageMetadata.cachedContentTokenCount ?? 0 }
+      : undefined,
   };
 }
 
@@ -73,7 +76,7 @@ export async function openaiComplete(apiKey: string, req: CompletionRequest): Pr
     body: JSON.stringify({
       model: req.model,
       messages: [
-        { role: 'system', content: req.system },
+        { role: 'system', content: systemWithPersona(req) },
         { role: 'user', content: req.user },
       ],
     }),
@@ -83,7 +86,9 @@ export async function openaiComplete(apiKey: string, req: CompletionRequest): Pr
     text: choice?.message?.content || '',
     model: data?.model || req.model,
     truncated: choice?.finish_reason === 'length',
-    usage: data?.usage ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 } : undefined,
+    usage: data?.usage
+      ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0, cacheRead: data.usage.prompt_tokens_details?.cached_tokens ?? 0 }
+      : undefined,
   };
 }
 
@@ -97,9 +102,6 @@ export async function openaiModels(apiKey: string): Promise<ModelOption[]> {
 }
 
 // --- Ollama (local) ---------------------------------------------------------------
-
-/** Ollama's default context is small and silently cuts long prompts; ask for room up front. */
-export const OLLAMA_NUM_CTX = 16384;
 
 export function checkOllamaUrl(url: string): string {
   let u: URL;
@@ -120,9 +122,10 @@ export async function ollamaComplete(baseUrl: string, req: CompletionRequest): P
     body: JSON.stringify({
       model: req.model,
       stream: false,
-      options: { num_ctx: OLLAMA_NUM_CTX },
+      // Sized to the prompt, so a long persona is never silently cut.
+      options: { num_ctx: ollamaContextFor(systemWithPersona(req).length + req.user.length) },
       messages: [
-        { role: 'system', content: req.system },
+        { role: 'system', content: systemWithPersona(req) },
         { role: 'user', content: req.user },
       ],
     }),

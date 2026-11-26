@@ -29,13 +29,13 @@ _2026-11-26. This is project 2 in the owner's order (stack fixer → **AI founda
 - **Browser dev build:** Ollama only, called directly; cloud providers say "desktop app only". No keys are stored in the browser.
 - **Settings modal:** Claude becomes the first provider. Key fields are write-only and show "•••• abcd" once set. Models come from the live list.
 
-## Slice 2: personas and prompt caching (next)
+## Slice 2: personas and prompt caching (built 2026-11-26)
 
 - **Personas:** Markdown files in a `Personas` folder (in the Notes home), chosen per task. Each is 10–20k words.
 - **Caching:** the persona goes in a cached `system` block (`cache_control`). The volatile parts (task, docs) come after it, so a cached persona costs about $0.005 per request on Opus 5.5. The `usage.cache_read_input_tokens` field is shown so the caching can be verified.
 - **Ollama:** `num_ctx` is sized to the persona.
 
-## Slice 3: the finder → condenser → thinker pipeline (after)
+## Slice 3: the finder → condenser → thinker pipeline (next)
 
 - **Finder:** Ollama `nomic-embed-text` embeddings of each doc, cached by content hash in `userData/docatlas/embeddings/`. It picks the relevant docs.
 - **Condenser:** `llama3.2` writes a "doc card" per file, also cached by content hash.

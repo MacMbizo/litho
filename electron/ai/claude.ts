@@ -28,6 +28,20 @@ export function claudeErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * The system prompt as blocks. A persona goes first with a cache breakpoint, so repeat requests read it from
+ * the cache (cache reads cost 1/20 of normal input on Opus 5.5); the task's own instructions follow, and the
+ * documents and question stay in the user message after it. Nothing volatile may go before the breakpoint.
+ * The cache is per model and effort, so each task (fixed effort) keeps its own warm copy.
+ */
+export function claudeSystem(req: Pick<CompletionRequest, 'persona' | 'system'>): string | Anthropic.Beta.BetaTextBlockParam[] {
+  if (!req.persona) return req.system;
+  const blocks: Anthropic.Beta.BetaTextBlockParam[] = [{ type: 'text', text: req.persona, cache_control: { type: 'ephemeral' } }];
+  // The API refuses empty text blocks.
+  if (req.system.trim()) blocks.push({ type: 'text', text: req.system });
+  return blocks;
+}
+
 export async function claudeComplete(apiKey: string, req: CompletionRequest): Promise<CompletionResult> {
   try {
     // Streaming keeps long inputs and outputs clear of HTTP timeouts; finalMessage() collects the result.
@@ -38,7 +52,7 @@ export async function claudeComplete(apiKey: string, req: CompletionRequest): Pr
       fallbacks: 'default',
       thinking: { type: 'adaptive' },
       output_config: { effort: req.effort },
-      system: req.system,
+      system: claudeSystem(req),
       messages: [{ role: 'user', content: req.user }],
     });
     const message = await stream.finalMessage();
@@ -58,6 +72,7 @@ export async function claudeComplete(apiKey: string, req: CompletionRequest): Pr
         input: message.usage.input_tokens,
         output: message.usage.output_tokens,
         cacheRead: message.usage.cache_read_input_tokens ?? 0,
+        cacheWrite: message.usage.cache_creation_input_tokens ?? 0,
       },
     };
   } catch (e) {

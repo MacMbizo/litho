@@ -9,12 +9,14 @@ import type { KeyStore } from './keyStore';
 import { isCloudProvider } from './keyStore';
 import { CLAUDE_DEFAULT_MODEL, CLAUDE_FALLBACK_MODELS, claudeComplete, claudeModels } from './claude';
 import { geminiComplete, geminiModels, ollamaComplete, ollamaModels, openaiComplete, openaiModels } from './otherProviders';
-import { TASK_EFFORT, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
+import { createPersona, isPersonaId, listPersonas, readPersona, type PersonaInfo } from './personas';
+import { AI_TASKS, TASK_EFFORT, type AIConfig, type AIProvider, type AITask, type CompletionResult, type ModelOption } from './types';
 
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'claude',
   models: { claude: CLAUDE_DEFAULT_MODEL, gemini: '', openai: '', ollama: '' },
   ollamaUrl: 'http://localhost:11434',
+  personas: {},
 };
 
 const PROVIDERS: AIProvider[] = ['claude', 'gemini', 'openai', 'ollama'];
@@ -29,10 +31,13 @@ export function normalizeConfig(raw: any): AIConfig {
     if (typeof m === 'string' && m.length <= 200 && !/[\s/\\]{2,}|[\r\n]/.test(m)) models[p] = m.trim();
   }
   if (!models.claude) models.claude = CLAUDE_DEFAULT_MODEL;
+  const personas: AIConfig['personas'] = {};
+  for (const t of AI_TASKS) if (isPersonaId(c.personas?.[t])) personas[t] = c.personas[t];
   return {
     provider: isProvider(c.provider) ? c.provider : DEFAULT_AI_CONFIG.provider,
     models,
     ollamaUrl: typeof c.ollamaUrl === 'string' && /^https?:\/\//.test(c.ollamaUrl) ? c.ollamaUrl.trim() : DEFAULT_AI_CONFIG.ollamaUrl,
+    personas,
   };
 }
 
@@ -64,15 +69,32 @@ export class AIGateway {
   constructor(
     private configFile: string,
     private keys: KeyStore,
-    private providers: Providers = realProviders
+    private providers: Providers = realProviders,
+    /** The Personas folder (inside the Notes folder in use); null where there is none. */
+    private personasDir: () => Promise<string | null> = async () => null
   ) {}
 
   async getConfig(): Promise<AIConfig> {
     try {
       return normalizeConfig(JSON.parse(await fs.promises.readFile(this.configFile, 'utf-8')));
     } catch {
-      return { ...DEFAULT_AI_CONFIG, models: { ...DEFAULT_AI_CONFIG.models } };
+      return { ...DEFAULT_AI_CONFIG, models: { ...DEFAULT_AI_CONFIG.models }, personas: {} };
     }
+  }
+
+  async personasFolder(): Promise<string | null> {
+    return this.personasDir();
+  }
+
+  async listPersonas(): Promise<{ folder: string | null; personas: PersonaInfo[] }> {
+    const folder = await this.personasDir();
+    return { folder, personas: folder ? await listPersonas(folder) : [] };
+  }
+
+  async createPersona(name: string): Promise<string> {
+    const folder = await this.personasDir();
+    if (!folder) throw new Error('There is no Personas folder.');
+    return createPersona(folder, name);
   }
 
   async setConfig(raw: unknown): Promise<AIConfig> {
@@ -129,17 +151,34 @@ export class AIGateway {
     }
   }
 
-  async prompt(task: AITask, system: string, user: string, override?: { provider?: AIProvider }): Promise<CompletionResult & { provider: AIProvider }> {
+  /**
+   * Runs a task. The persona is the one Settings picked for the task, unless `override.persona` names
+   * another (a file id) or turns it off (null).
+   */
+  async prompt(
+    task: AITask,
+    system: string,
+    user: string,
+    override?: { provider?: AIProvider; persona?: string | null }
+  ): Promise<CompletionResult & { provider: AIProvider; persona?: { id: string; name: string } }> {
     const config = await this.getConfig();
     const provider = override?.provider && isProvider(override.provider) ? override.provider : config.provider;
     const key = isCloudProvider(provider) ? await this.keys.get(provider) : undefined;
     if (isCloudProvider(provider) && !key) throw new Error(`Add a ${LABEL[provider]} API key in AI Settings first.`);
+    const personaId = override && 'persona' in override ? override.persona : config.personas[task];
+    let persona: Awaited<ReturnType<typeof readPersona>> | undefined;
+    if (personaId) {
+      const folder = await this.personasDir();
+      if (!folder) throw new Error('Personas need the desktop app.');
+      persona = await readPersona(folder, personaId);
+    }
     const result = await this.providers.complete(provider, key, config.ollamaUrl, {
+      persona: persona?.text,
       system,
       user,
       model: config.models[provider],
       effort: TASK_EFFORT[task] ?? 'medium',
     });
-    return { ...result, provider };
+    return { ...result, provider, ...(persona ? { persona: { id: persona.id, name: persona.name } } : {}) };
   }
 }

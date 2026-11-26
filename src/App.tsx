@@ -1574,6 +1574,7 @@ const AppContent: React.FC = () => {
       <AISettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
+        onOpenFile={canUseNotes ? (file) => openMarkdownPaths([file]) : undefined}
         notes={
           canUseNotes
             ? {

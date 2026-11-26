@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Settings, Check, X, RefreshCw, Cpu, Cloud, KeyRound, AlertCircle, NotebookPen, FolderOpen, RotateCcw, Lock, Trash2 } from 'lucide-react';
-import { AIService, type AIConfig, type AIProvider } from '../../services/aiService';
+import { Settings, Check, X, RefreshCw, Cpu, Cloud, KeyRound, AlertCircle, NotebookPen, FolderOpen, RotateCcw, Lock, Trash2, Drama, FilePlus } from 'lucide-react';
+import { AIService, type AIConfig, type AIProvider, type AITask, type PersonaInfo } from '../../services/aiService';
 import type { ModelOption } from '../../../electron/ai/types';
 import type { KeyStatus } from '../../../electron/ai/keyStore';
 
@@ -17,7 +17,19 @@ interface AISettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   notes?: NotesFolderSettings;
+  /** Opens a Markdown file in the editor (a new persona, ready to write). */
+  onOpenFile?: (fullPath: string) => void;
 }
+
+/** Tasks a persona can be picked for, in the order shown. */
+const PERSONA_TASKS: Array<{ task: AITask; label: string; hint: string }> = [
+  { task: 'chat', label: 'Project chat', hint: 'Questions about a project' },
+  { task: 'summarize', label: 'Summaries', hint: 'Summarize a document' },
+  { task: 'categorize', label: 'Classify', hint: 'Suggest type and tags' },
+  { task: 'agent', label: 'Agent sandbox', hint: 'Added before the agent file' },
+];
+
+const personaSize = (p: PersonaInfo) => `${p.words.toLocaleString('en-US')} words · ~${p.approxTokens.toLocaleString('en-US')} tokens`;
 
 const sameFolder = (a: string | null, b: string | null) =>
   Boolean(a && b) && a!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase() === b!.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
@@ -31,7 +43,7 @@ const PROVIDERS: Array<{ id: AIProvider; label: string; sub: string; Icon: React
 
 const input = 'w-full bg-[#222] border border-[#333] rounded px-2.5 py-1.5 text-neutral-200 focus:outline-none focus:border-purple-500 font-mono text-[11px]';
 
-export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClose, notes }) => {
+export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClose, notes, onOpenFile }) => {
   const desktop = AIService.isDesktop();
   const [config, setConfig] = useState<AIConfig | null>(null);
   const [keys, setKeys] = useState<KeyStatus | null>(null);
@@ -43,6 +55,37 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
   // Browser dev build: a local Ollama only.
   const [browserOllama, setBrowserOllama] = useState(AIService.getBrowserOllama());
   const [browserModels, setBrowserModels] = useState<{ ok: boolean; models: string[] } | null>(null);
+  // Personas (desktop only).
+  const [personas, setPersonas] = useState<{ folder: string | null; personas: PersonaInfo[] } | null>(null);
+  const [newPersonaName, setNewPersonaName] = useState<string | null>(null);
+  const [personaError, setPersonaError] = useState<string | null>(null);
+
+  const loadPersonas = useCallback(async () => {
+    try {
+      setPersonas(await AIService.listPersonas());
+    } catch (e: any) {
+      setPersonaError(e?.message || String(e));
+    }
+  }, []);
+
+  const createPersona = async () => {
+    const name = (newPersonaName || '').trim();
+    if (!name || !config) return;
+    setPersonaError(null);
+    try {
+      const { path: file } = await window.electronAPI!.aiCreatePersona!(name);
+      setNewPersonaName(null);
+      await loadPersonas();
+      if (onOpenFile) {
+        // Keep any unsaved choices, then open the new persona to write it.
+        await window.electronAPI!.aiSetConfig!(config);
+        onClose();
+        onOpenFile(file);
+      }
+    } catch (e: any) {
+      setPersonaError(String(e?.message || e).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, ''));
+    }
+  };
 
   const loadModels = useCallback(async (provider: AIProvider) => {
     setModels({ provider, list: [], loading: true });
@@ -65,12 +108,15 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
         setKeys(k);
         if (c) loadModels(c.provider);
       });
+      setNewPersonaName(null);
+      setPersonaError(null);
+      loadPersonas();
     } else {
       const b = AIService.getBrowserOllama();
       setBrowserOllama(b);
       AIService.checkOllama(b.url).then(setBrowserModels);
     }
-  }, [isOpen, desktop, loadModels]);
+  }, [isOpen, desktop, loadModels, loadPersonas]);
 
   const pickProvider = (p: AIProvider) => {
     if (!config) return;
@@ -330,6 +376,109 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({ isOpen, onClos
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {list.error}
                     </p>
                   )}
+                </div>
+              </div>
+
+              {/* Personas */}
+              <div className="space-y-2" data-testid="ai-personas">
+                <label className="font-semibold text-neutral-300 flex items-center gap-1.5">
+                  <Drama className="w-3.5 h-3.5 text-fuchsia-400" />
+                  Personas
+                </label>
+                <div className="p-3.5 rounded-lg bg-[#181818] border border-[#2e2e2e] space-y-3">
+                  <p className="text-[11px] text-neutral-500 leading-relaxed">
+                    A persona is a Markdown brief that tells the AI who to be for a task. Long is fine: with Claude it's cached, so after the first answer it costs about a
+                    twentieth as much.
+                  </p>
+                  {PERSONA_TASKS.map(({ task, label, hint }) => {
+                    const chosen = config.personas[task] || '';
+                    const known = personas?.personas.find((x) => x.id === chosen);
+                    return (
+                      <div key={task} className="grid grid-cols-[7.5rem_1fr] items-center gap-2">
+                        <span className="text-[11px] text-neutral-300" title={hint}>
+                          {label}
+                        </span>
+                        <select
+                          value={chosen}
+                          onChange={(e) => {
+                            const next = { ...config.personas };
+                            if (e.target.value) next[task] = e.target.value;
+                            else delete next[task];
+                            setConfig({ ...config, personas: next });
+                          }}
+                          className={input}
+                          aria-label={`Persona for ${label}`}
+                        >
+                          <option value="">None</option>
+                          {chosen && personas && !known && <option value={chosen}>{chosen.replace(/\.md$/i, '')} (missing)</option>}
+                          {(personas?.personas || []).map((x) => (
+                            <option key={x.id} value={x.id} disabled={x.tooLarge}>
+                              {x.name} ({personaSize(x)}){x.tooLarge ? ': too long' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
+                  {personas && personas.personas.length === 0 && (
+                    <p className="text-[11px] text-neutral-500">No personas yet. Create one, or put .md files in the Personas folder.</p>
+                  )}
+                  {newPersonaName !== null ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        autoFocus
+                        value={newPersonaName}
+                        onChange={(e) => setNewPersonaName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') createPersona();
+                          if (e.key === 'Escape') setNewPersonaName(null);
+                        }}
+                        placeholder="e.g. Software architect"
+                        className={input}
+                        aria-label="New persona name"
+                        maxLength={120}
+                      />
+                      <button
+                        type="button"
+                        onClick={createPersona}
+                        disabled={!newPersonaName.trim()}
+                        className="shrink-0 px-2.5 py-1.5 rounded bg-[#2a2a3a] hover:bg-purple-600/40 border border-purple-500/40 text-purple-100 disabled:opacity-40"
+                      >
+                        Create
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewPersonaName('')}
+                        className="px-2.5 py-1.5 rounded-md bg-[#262626] hover:bg-[#303030] border border-[#363636] text-neutral-200 flex items-center gap-1.5 transition"
+                      >
+                        <FilePlus className="w-3.5 h-3.5 text-fuchsia-400" />
+                        <span>New persona…</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await window.electronAPI!.aiOpenPersonasFolder!();
+                          loadPersonas();
+                        }}
+                        className="px-2.5 py-1.5 rounded-md hover:bg-[#2a2a2a] text-neutral-400 hover:text-neutral-200 flex items-center gap-1.5 transition"
+                        title={personas?.folder || undefined}
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                        <span>Open folder</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={loadPersonas}
+                        className="ml-auto text-[10px] text-neutral-500 hover:text-neutral-300 flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-3 h-3" /> Refresh
+                      </button>
+                    </div>
+                  )}
+                  {personaError && <p className="text-rose-300 text-[11px]">{personaError}</p>}
                 </div>
               </div>
             </>

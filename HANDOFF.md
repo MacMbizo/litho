@@ -4,7 +4,7 @@ _Last updated 2026-11-26 (end of session). Everything is merged into `main` and 
 
 ## Start here (next session)
 
-- **Next task:** AI foundation **slice 2**, personas plus prompt caching. Then slice 3 (finder → condenser → thinker). Spec: `docs/superpowers/specs/2026-11-26-ai-foundation-design.md`. Load the `claude-api` skill before writing Claude code.
+- **Next task:** AI foundation **slice 3** (finder → condenser → thinker). Slice 2 (personas + prompt caching) is built on branch `feat/ai-personas`; see "Slice 2" below. Spec: `docs/superpowers/specs/2026-11-26-ai-foundation-design.md`. Load the `claude-api` skill before writing Claude code.
 - **Waiting on the owner:**
   - Add a real Claude key in AI & Settings. A real Claude answer has never been tested (no key was used, to avoid spending credit).
   - Re-pick the Ollama model if they used Ollama before. The legacy `llama3` default isn't installed; `llama3.2` is.
@@ -65,7 +65,7 @@ The original spec (`docatlas_specification.md`) is **not in the repo**. It's at 
 
 | Task | Command |
 | --- | --- |
-| Unit tests (124) | `npm test` |
+| Unit tests (130) | `npm test` |
 | Typecheck | `npx tsc --noEmit -p .` |
 | Full build (renderer + electron) | `npm run build` |
 | Run desktop app | `npm run build && npm start` |
@@ -326,7 +326,17 @@ The owner's standard: every project has a README that says what it is, a git rep
      - **Other providers:** the Gemini key is in a header. Model lists are live. Ollama uses `num_ctx` 16k. Settings were rebuilt.
      - **Verified:** 124 unit tests. E2E 13/13: legacy migration, an encrypted file on disk, a real local `llama3.2` answer through the gateway, a fake Claude key rejected with a plain message, key removal.
      - **Not verified:** a real Claude, Gemini or OpenAI answer, since no real key was used.
-   - **Next: slice 2 (personas + prompt caching), then slice 3 (finder → condenser → thinker).**
+   - **Slice 2, done 2026-11-26 (personas + prompt caching), branch `feat/ai-personas`:**
+     - **Personas:** `.md` files in `<Notes folder>\Personas` (follows the Notes folder setting), so they show under Notes and are edited in Litho. Name from frontmatter `name`, else the H1, else the file name; frontmatter is not sent. Max 400k chars.
+     - **Code:** `electron/ai/personas.ts` (list, read, create with `wx`, `ollamaContextFor`); the gateway takes a `personasDir` function; IPC `ai:listPersonas`, `ai:createPersona`, `ai:openPersonasFolder`; `ai:prompt` accepts `persona` (file id, or `null` for none).
+     - **Settings:** one persona per task (`AIConfig.personas`: chat, summarize, categorize, agent), "New persona…" creates a starter file and opens it in the editor, "Open folder". A deleted persona shows as "(missing)" and the task fails with a plain sentence rather than silently running without it.
+     - **Claude:** `claudeSystem` sends the persona as the first system block with `cache_control: ephemeral` (5-minute TTL), then the task's instructions; docs and the question stay in the user message. The cache is per model and effort, so each task keeps its own copy. `usage.cacheWrite` was added.
+     - **Others:** Gemini, OpenAI and Ollama get the persona joined to the front of the system prompt (`systemWithPersona`); OpenAI and Gemini cached-token counts are read. Ollama's `num_ctx` is sized to the prompt (chars/3 + 4k, in 4k steps, 16k–128k).
+     - **Shown:** the run line (`describeRun`) under summaries and project-chat answers: "Persona: X · N tokens from cache · model".
+     - **Verified:** 130 unit tests. The SDK's real request body, captured against a local stub server: persona block with `cache_control`, then the task block, plus adaptive thinking, effort and fallbacks. Electron e2e 14/14 (isolated userData and Notes folder): empty state, create and open, list with sizes, choice saved, a real `llama3.2` summary that followed a pirate persona, missing persona shown and a plain error, no console errors. Script: `scratchpad/e2e/e2e-personas.cjs` (not in the repo).
+     - **Not verified:** a real Claude cache hit (`cache_read_input_tokens` > 0) needs the owner's key: pick a persona for Project chat and ask twice within 5 minutes; the second answer should say "N tokens from cache". Light theme.
+     - **Ideas not built:** a 1-hour TTL option if gaps between questions are usually 5–60 min; ship a few starter personas.
+   - **Next: slice 3 (finder → condenser → thinker).**
    - Add a Claude provider. Current IDs (Nov 2026): default `claude-opus-5-5` ($4/$20 per MTok, cache reads $0.20); also `claude-sonnet-5-5` and `claude-haiku-5-5`. Use `@anthropic-ai/sdk` and load the claude-api skill before coding.
    - Personas as Markdown files in a `Personas` folder, picked per task, 10–20k words. Use prompt caching so a cached persona costs about $0.005 per request on Opus 5.5.
    - Move API keys out of localStorage into Electron `safeStorage`, and make calls from the main process. Today the Gemini key is in the URL and calls come from the renderer.

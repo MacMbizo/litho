@@ -7,6 +7,7 @@ import type { BasicsAction, BasicsActionResult } from './basicsFixes';
 import { summaryToEntry, type ProjectSummaryPayload } from './projectSummary';
 import type { AIConfig, AIProvider, AITask, CompletionResult, ModelOption } from '../../electron/ai/types';
 import type { CloudProvider, KeyStatus } from '../../electron/ai/keyStore';
+import type { PersonaInfo } from '../../electron/ai/personas';
 import type { PortfolioProjectSummary } from '../types/docAudit';
 import type { FixEvent, FixPlan } from '../../electron/fixRunner';
 
@@ -64,7 +65,16 @@ declare global {
       aiClearKey?: (provider: CloudProvider) => Promise<KeyStatus>;
       aiListModels?: (provider: AIProvider) => Promise<{ models: ModelOption[]; error?: string }>;
       aiMigrateLegacy?: (legacy: unknown) => Promise<{ movedKeys: string[] }>;
-      aiPrompt?: (req: { task: AITask; system: string; user: string; provider?: AIProvider }) => Promise<CompletionResult & { provider: AIProvider }>;
+      aiPrompt?: (req: {
+        task: AITask;
+        system: string;
+        user: string;
+        provider?: AIProvider;
+        persona?: string | null;
+      }) => Promise<CompletionResult & { provider: AIProvider; persona?: { id: string; name: string } }>;
+      aiListPersonas?: () => Promise<{ folder: string | null; personas: PersonaInfo[] }>;
+      aiCreatePersona?: (name: string) => Promise<{ id: string; path: string }>;
+      aiOpenPersonasFolder?: () => Promise<boolean>;
       onFsChanged: (callback: (data: any) => void) => (() => void) | void;
     };
   }

@@ -8,7 +8,8 @@ import { BasicsController, ghStatus, gitUserName, planGitignore } from './basics
 import { summarizeScan, type ProjectSummaryPayload } from '../src/services/projectSummary';
 import { safeStorage } from 'electron';
 import { KeyStore, isCloudProvider } from './ai/keyStore';
-import { AIGateway } from './ai/gateway';
+import { AIGateway, realProviders } from './ai/gateway';
+import { PERSONAS_FOLDER_NAME, isPersonaId } from './ai/personas';
 
 // Suppress harmless Windows MediaFoundation video accelerator log without disabling GPU
 app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoEncodeAccelerator');
@@ -151,7 +152,18 @@ ipcMain.handle('basics:openUrl', async (_, url: string) => {
 
 // --- AI gateway: every model call runs here; API keys never reach the renderer -------------
 const aiKeys = new KeyStore(path.join(app.getPath('userData'), 'docatlas', 'ai-keys.bin'), safeStorage);
-const aiGateway = new AIGateway(path.join(app.getPath('userData'), 'docatlas', 'ai-config.json'), aiKeys);
+// Personas live in <Notes folder>/Personas, following the Notes folder setting (notes.json).
+async function personasDir(): Promise<string> {
+  let preferred: string | undefined;
+  try {
+    const f = JSON.parse(await fs.promises.readFile(storePath('notes'), 'utf-8'))?.folder;
+    if (typeof f === 'string' && f) preferred = f;
+  } catch {
+    // no notes settings yet: the default folder
+  }
+  return path.join(await notesFolderInUse(preferred), PERSONAS_FOLDER_NAME);
+}
+const aiGateway = new AIGateway(path.join(app.getPath('userData'), 'docatlas', 'ai-config.json'), aiKeys, realProviders, personasDir);
 const AI_TASKS = new Set(['categorize', 'summarize', 'chat', 'agent']);
 const AI_MAX_PROMPT_CHARS = 3_000_000;
 
@@ -176,7 +188,25 @@ ipcMain.handle('ai:migrateLegacy', (_, legacy: unknown) => aiGateway.migrateLega
 ipcMain.handle('ai:prompt', (_, req: any) => {
   if (!req || !AI_TASKS.has(req.task) || typeof req.system !== 'string' || typeof req.user !== 'string') throw new Error('Invalid AI request');
   if (req.system.length + req.user.length > AI_MAX_PROMPT_CHARS) throw new Error('That is too much text for one AI request.');
-  return aiGateway.prompt(req.task, req.system, req.user, req.provider ? { provider: req.provider } : undefined);
+  if (req.persona !== undefined && req.persona !== null && !isPersonaId(req.persona)) throw new Error('Invalid persona');
+  const override: { provider?: any; persona?: string | null } = {};
+  if (req.provider) override.provider = req.provider;
+  if (req.persona !== undefined) override.persona = req.persona;
+  return aiGateway.prompt(req.task, req.system, req.user, override);
+});
+ipcMain.handle('ai:listPersonas', () => aiGateway.listPersonas());
+ipcMain.handle('ai:createPersona', async (_, name: unknown) => {
+  if (typeof name !== 'string' || name.length > 120) throw new Error('Give the persona a shorter name.');
+  const id = await aiGateway.createPersona(name);
+  return { id, path: path.join((await aiGateway.personasFolder())!, id) };
+});
+// Opens the folder itself in File Explorer (created first). Only ever this one folder.
+ipcMain.handle('ai:openPersonasFolder', async () => {
+  const dir = await aiGateway.personasFolder();
+  if (!dir) return false;
+  await fs.promises.mkdir(dir, { recursive: true });
+  if (!(await fs.promises.stat(dir)).isDirectory()) return false;
+  return (await shell.openPath(dir)) === '';
 });
 
 function createWindow() {
@@ -590,8 +620,10 @@ const defaultNotesFolder = () => path.join(app.getPath('documents'), 'DocAtlas N
 ipcMain.handle('notes:getDefaultFolder', async () => defaultNotesFolder());
 
 // Returns the chosen folder when it can be used (created if missing), otherwise the default.
-ipcMain.handle('notes:getFolder', async (_, preferred?: string) => {
-  if (preferred && path.isAbsolute(preferred)) {
+ipcMain.handle('notes:getFolder', async (_, preferred?: string) => notesFolderInUse(preferred));
+
+async function notesFolderInUse(preferred?: string): Promise<string> {
+  if (typeof preferred === 'string' && preferred && path.isAbsolute(preferred)) {
     try {
       await fs.promises.mkdir(preferred, { recursive: true });
       if ((await fs.promises.stat(preferred)).isDirectory()) return preferred;
@@ -602,7 +634,7 @@ ipcMain.handle('notes:getFolder', async (_, preferred?: string) => {
   const dir = defaultNotesFolder();
   await fs.promises.mkdir(dir, { recursive: true });
   return dir;
-});
+}
 
 // Files handed to the app on its command line (or by "Open with"), queued until the UI asks for them.
 ipcMain.handle('app:takeLaunchFiles', async () => {

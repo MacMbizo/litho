@@ -6,6 +6,9 @@ import path from 'node:path';
 import { KeyStore, type Cipher } from '../electron/ai/keyStore.ts';
 import { AIGateway, DEFAULT_AI_CONFIG, normalizeConfig, type Providers } from '../electron/ai/gateway.ts';
 import { checkOllamaUrl } from '../electron/ai/otherProviders.ts';
+import { claudeSystem } from '../electron/ai/claude.ts';
+import { systemWithPersona } from '../electron/ai/types.ts';
+import { PERSONA_MAX_CHARS, createPersona, isPersonaId, listPersonas, ollamaContextFor, parsePersona, readPersona } from '../electron/ai/personas.ts';
 
 /** Reversible stand-in for safeStorage: proves the file never holds the key in plain text. */
 const fakeCipher = (available = true): Cipher => ({
@@ -115,6 +118,106 @@ test('migrateLegacy moves old localStorage keys into the store once, drops stale
     await keys.set('gemini', 'AIzaNEWKEY');
     assert.deepStrictEqual(await gw.migrateLegacy({ geminiApiKey: 'AIzaOLDKEY' }), { movedKeys: [] });
     assert.strictEqual(await keys.get('gemini'), 'AIzaNEWKEY');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Slice 2: personas and prompt caching ------------------------------------------
+
+test('isPersonaId accepts plain .md file names only', () => {
+  assert.ok(isPersonaId('Software architect.md'));
+  for (const bad of ['../x.md', 'a/b.md', 'a\\b.md', '.hidden.md', 'notes.txt', 'C:x.md', '', 5]) assert.ok(!isPersonaId(bad), String(bad));
+});
+
+test('parsePersona takes the name from frontmatter, then the H1, then the file name', () => {
+  const a = parsePersona('a.md', '---\nname: Architect\ndescription: Designs systems\n---\n\n# Ignored\n\nThink in boundaries.');
+  assert.strictEqual(a.name, 'Architect');
+  assert.strictEqual(a.description, 'Designs systems');
+  assert.ok(!a.text.includes('name:'), 'frontmatter is not sent to the model');
+  assert.strictEqual(parsePersona('b.md', '# Editor\n\nCut words.').name, 'Editor');
+  assert.strictEqual(parsePersona('Plain one.md', 'just text here').name, 'Plain one');
+  assert.strictEqual(parsePersona('c.md', 'one two three').words, 3);
+});
+
+test('listPersonas, createPersona (never overwrites) and readPersona errors', async () => {
+  const dir = tmp();
+  try {
+    const folder = path.join(dir, 'Personas');
+    assert.deepStrictEqual(await listPersonas(folder), [], 'no folder yet is fine');
+    const id = await createPersona(folder, 'Software architect');
+    assert.strictEqual(id, 'Software architect.md');
+    fs.writeFileSync(path.join(folder, id), '# Mine\n\nKeep me.');
+    assert.strictEqual(await createPersona(folder, 'Software architect'), 'Software architect 2.md');
+    assert.strictEqual(fs.readFileSync(path.join(folder, id), 'utf-8'), '# Mine\n\nKeep me.', 'existing file untouched');
+    assert.strictEqual(await createPersona(folder, 'a/b:c'), 'a b c.md', 'unsafe characters replaced');
+    fs.writeFileSync(path.join(folder, 'ignore.txt'), 'x');
+    const list = await listPersonas(folder);
+    assert.deepStrictEqual(list.map((p) => p.id), ['a b c.md', 'Software architect 2.md', 'Software architect.md']);
+    assert.ok(!('text' in list[0]), 'the list carries no persona text');
+    await assert.rejects(readPersona(folder, 'gone.md'), /no longer in the Personas folder/);
+    await assert.rejects(readPersona(folder, '../ai-config.md'), /not valid/);
+    fs.writeFileSync(path.join(folder, 'empty.md'), '---\nname: Empty\n---\n');
+    await assert.rejects(readPersona(folder, 'empty.md'), /is empty/);
+    fs.writeFileSync(path.join(folder, 'huge.md'), 'x'.repeat(PERSONA_MAX_CHARS + 1));
+    await assert.rejects(readPersona(folder, 'huge.md'), /too long/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('claudeSystem puts the persona first with a cache breakpoint, task instructions after it', () => {
+  assert.strictEqual(claudeSystem({ system: 'task' }), 'task', 'no persona: a plain string, nothing cached');
+  assert.deepStrictEqual(claudeSystem({ persona: 'P', system: 'task' }), [
+    { type: 'text', text: 'P', cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: 'task' },
+  ]);
+  assert.strictEqual((claudeSystem({ persona: 'P', system: '  ' }) as any[]).length, 1, 'no empty text block');
+  assert.strictEqual(systemWithPersona({ persona: 'P', system: 'task' }), 'P\n\n---\n\ntask');
+  assert.strictEqual(systemWithPersona({ system: 'task' }), 'task');
+});
+
+test('ollamaContextFor fits the whole prompt, in 4k steps, between 16k and 128k', () => {
+  assert.strictEqual(ollamaContextFor(1000), 16384);
+  const ctx = ollamaContextFor(150_000); // ~20k-word persona
+  assert.ok(ctx >= 150_000 / 3 + 4096 && ctx % 4096 === 0, String(ctx));
+  assert.strictEqual(ollamaContextFor(5_000_000), 131072);
+});
+
+test('gateway sends the persona chosen for the task, honours overrides, and keeps choices in settings', async () => {
+  const dir = tmp();
+  try {
+    const folder = path.join(dir, 'Personas');
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, 'Architect.md'), '---\nname: The Architect\n---\nThink in boundaries.');
+    const log: any[] = [];
+    const providers: Providers = {
+      complete: async (provider, _key, _url, req) => {
+        log.push(req);
+        return { text: 'ok', model: req.model };
+      },
+      models: async () => [],
+    };
+    const gw = new AIGateway(path.join(dir, 'ai-config.json'), new KeyStore(path.join(dir, 'k.bin'), fakeCipher()), providers, async () => folder);
+    await gw.setConfig({ provider: 'ollama', models: { ollama: 'llama3.2' }, personas: { chat: 'Architect.md', summarize: '../evil.md', bogus: 'Architect.md' } });
+    assert.deepStrictEqual((await gw.getConfig()).personas, { chat: 'Architect.md' }, 'only valid tasks and file names are kept');
+
+    const r = await gw.prompt('chat', 'sys', 'q');
+    assert.strictEqual(log[0].persona, 'Think in boundaries.');
+    assert.strictEqual(log[0].system, 'sys');
+    assert.deepStrictEqual(r.persona, { id: 'Architect.md', name: 'The Architect' });
+
+    await gw.prompt('summarize', 'sys', 'q');
+    assert.strictEqual(log[1].persona, undefined, 'no persona picked for summaries');
+    const off = await gw.prompt('chat', 'sys', 'q', { persona: null });
+    assert.strictEqual(log[2].persona, undefined);
+    assert.strictEqual(off.persona, undefined, 'override turns it off');
+    await gw.prompt('summarize', 'sys', 'q', { persona: 'Architect.md' });
+    assert.strictEqual(log[3].persona, 'Think in boundaries.', 'override picks one');
+
+    fs.rmSync(path.join(folder, 'Architect.md'));
+    await assert.rejects(gw.prompt('chat', 'sys', 'q'), /no longer in the Personas folder/);
+    assert.deepStrictEqual((await gw.listPersonas()).personas, []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
